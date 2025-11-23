@@ -34,8 +34,8 @@ function App() {
   const [rdDownloads, setRdDownloads] = useState([]);
   const [virustotalApiKey, setVirustotalApiKey] = useState('');
   const [tempVirustotalApiKey, setTempVirustotalApiKey] = useState('');
-  const [theme, setTheme] = useState('dark'); // 'dark' or 'switch'
-  const themeRef = useRef('dark');
+  const [theme, setTheme] = useState('pc'); // 'pc' or 'tv'
+  const themeRef = useRef('pc');
 
   useEffect(() => {
     themeRef.current = theme;
@@ -43,7 +43,7 @@ function App() {
 
   // Memoized games list based on theme
   const displayedGames = useMemo(() => {
-    if (theme === 'switch') {
+    if (theme === 'tv') {
       return [...games].sort((a, b) => (b.lastPlayed || 0) - (a.lastPlayed || 0));
     }
     return games;
@@ -106,9 +106,9 @@ function App() {
     }
   }, [selectedCoverIndex, showCoverArtSelector, availableCovers.length]);
 
-  // Auto-scroll for Switch theme games
+  // Auto-scroll for TV theme games
   useEffect(() => {
-    if (theme === 'switch' && activeTab === 'steam') {
+    if (theme === 'tv' && activeTab === 'steam') {
       // Find the selected wrapper
       const wrappers = document.querySelectorAll('.game-wrapper');
       if (wrappers[controllerSelectedIndex]) {
@@ -251,9 +251,9 @@ function App() {
         }
 
         // Load theme preference
-        const savedTheme = localStorage.getItem('theme') || 'dark';
+        const savedTheme = localStorage.getItem('theme') || 'pc';
         setTheme(savedTheme);
-        document.body.className = savedTheme === 'switch' ? 'switch-theme' : '';
+        document.body.className = savedTheme === 'tv' ? 'tv-theme' : '';
       }
     };
     fetchApiKey();
@@ -308,7 +308,7 @@ function App() {
   const handleThemeChange = (newTheme) => {
     setTheme(newTheme);
     localStorage.setItem('theme', newTheme);
-    document.body.className = newTheme === 'switch' ? 'switch-theme' : '';
+    document.body.className = newTheme === 'tv' ? 'tv-theme' : '';
   };
 
   const handleBackloggdLogin = async () => {
@@ -1545,10 +1545,10 @@ function App() {
 
     onButtonPress(0, 7, () => { // R2 / RT - Toggle Theme
       const currentTheme = themeRef.current;
-      const newTheme = currentTheme === 'dark' ? 'switch' : 'dark';
+      const newTheme = currentTheme === 'pc' ? 'tv' : 'pc';
       setTheme(newTheme);
       localStorage.setItem('theme', newTheme);
-      document.body.className = newTheme === 'switch' ? 'switch-theme' : '';
+      document.body.className = newTheme === 'tv' ? 'tv-theme' : '';
     });
 
     // Poll axis movement and D-pad more frequently
@@ -1685,10 +1685,10 @@ function App() {
           )}
           <button
             className="theme-toggle-btn"
-            onClick={() => handleThemeChange(theme === 'dark' ? 'switch' : 'dark')}
-            title={`Switch to ${theme === 'dark' ? 'Switch' : 'Dark'} Theme`}
+            onClick={() => handleThemeChange(theme === 'pc' ? 'tv' : 'pc')}
+            title={`Switch to ${theme === 'pc' ? 'TV' : 'PC'} Mode`}
           >
-            {theme === 'dark' ? '🎮' : '🌙'}
+            {theme === 'pc' ? '🖥️' : '📺'}
           </button>
           <button className="settings-btn" onClick={() => setShowSettings(true)}>
             Settings
@@ -1772,9 +1772,9 @@ function App() {
                             </div>
                           )}
                         </div>
-                        {theme === 'switch' && (
+                        {theme === 'tv' && (
                           <div className="game-title-text" style={{
-                            color: '#000000',
+                            color: '#e0e0e0',
                             fontFamily: "'Nunito', sans-serif",
                             fontSize: '1.6rem',
                             fontWeight: '700',

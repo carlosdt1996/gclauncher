@@ -154,7 +154,7 @@ body {
   align-items: start;
 }
 
-/* Game Wrapper - Dark Theme (Grid Layout) */
+/* Game Wrapper - PC Theme (Grid Layout) */
 .game-wrapper {
   display: flex;
   flex-direction: column;
@@ -162,8 +162,8 @@ body {
   height: 100%;
 }
 
-/* Game Wrapper - Switch Theme (Flex Layout) */
-.switch-theme .game-wrapper {
+/* Game Wrapper - TV Theme (Flex Layout) */
+.tv-theme .game-wrapper {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -184,8 +184,8 @@ body {
   flex-shrink: 0;
 }
 
-/* Fix image distortion in dark mode only */
-body:not(.switch-theme) .game-card {
+/* Fix image distortion in PC mode only */
+body:not(.tv-theme) .game-card {
   background-size: cover !important;
   background-position: center !important;
   background-repeat: no-repeat !important;
@@ -831,189 +831,189 @@ body:not(.switch-theme) .game-card {
   transform: scale(1.05);
 }
 
-/* Nintendo Switch Theme */
-body.switch-theme {
-  background: linear-gradient(135deg, #c0c0c0 0%, #a0a0a0 100%);
-  color: #2c2c2c;
+/* TV Theme - Ultra Dark Mode */
+body.tv-theme {
+  background: linear-gradient(135deg, #000000 0%, #0a0a0a 100%);
+  color: #d0d0d0;
 }
 
-.switch-theme .app {
+.tv-theme .app {
   background: transparent;
 }
 
-.switch-theme header {
-  background: #ffffff;
-  border-bottom: 2px solid #e0e0e0;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+.tv-theme header {
+  background: #000000;
+  border-bottom: 2px solid #1a1a1a;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
 }
 
-.switch-theme h1 {
+.tv-theme h1 {
   background: linear-gradient(135deg, #e60012 0%, #ff6b6b 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
 }
 
-.switch-theme .nav-tab {
-  background: #f5f5f5;
-  color: #2c2c2c;
+.tv-theme .nav-tab {
+  background: #0a0a0a;
+  color: #d0d0d0;
   border: 2px solid transparent;
   border-radius: 20px;
 }
 
-.switch-theme .nav-tab:hover {
-  background: #e8e8e8;
+.tv-theme .nav-tab:hover {
+  background: #1a1a1a;
   border-color: #e60012;
 }
 
-.switch-theme .nav-tab.active {
+.tv-theme .nav-tab.active {
   background: #e60012;
   color: #ffffff;
   border-color: #e60012;
 }
 
-.switch-theme .controller-tab-selected {
+.tv-theme .controller-tab-selected {
   border-color: #00d4ff !important;
   box-shadow: 0 0 15px rgba(0, 212, 255, 0.6);
 }
 
-.switch-theme .settings-btn,
-.switch-theme .theme-toggle-btn {
+.tv-theme .settings-btn,
+.tv-theme .theme-toggle-btn {
   background: #e60012;
   color: #ffffff;
   border: none;
   border-radius: 20px;
 }
 
-.switch-theme .settings-btn:hover,
-.switch-theme .theme-toggle-btn:hover {
+.tv-theme .settings-btn:hover,
+.tv-theme .theme-toggle-btn:hover {
   background: #ff1a2e;
   transform: scale(1.05);
 }
 
-.switch-theme .game-card {
-  background: #ffffff;
-  border: 3px solid #e0e0e0;
+.tv-theme .game-card {
+  background: #0a0a0a;
+  border: 3px solid #1a1a1a;
   border-radius: 16px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.8);
 }
 
-.switch-theme .game-card:hover {
+.tv-theme .game-card:hover {
   border-color: #e60012;
-  box-shadow: 0 8px 24px rgba(230, 0, 18, 0.2);
+  box-shadow: 0 8px 24px rgba(230, 0, 18, 0.5);
   transform: translateY(-8px);
 }
 
-.switch-theme .controller-selected {
+.tv-theme .controller-selected {
   border-color: #00d4ff !important;
-  box-shadow: 0 8px 30px rgba(0, 212, 255, 0.6) !important;
+  box-shadow: 0 8px 30px rgba(0, 212, 255, 0.7) !important;
   transform: translateY(-8px) scale(1.02);
 }
 
-.switch-theme .game-title {
-  color: #2c2c2c;
-  background: linear-gradient(to bottom, rgba(255, 255, 255, 0.95), rgba(240, 240, 240, 0.95));
+.tv-theme .game-title {
+  color: #d0d0d0;
+  background: linear-gradient(to bottom, rgba(10, 10, 10, 0.95), rgba(0, 0, 0, 0.95));
 }
 
-.switch-theme .modal-overlay {
-  background: rgba(0, 0, 0, 0.6);
+.tv-theme .modal-overlay {
+  background: rgba(0, 0, 0, 0.9);
 }
 
-.switch-theme .modal {
-  background: #ffffff;
-  border: 3px solid #e0e0e0;
+.tv-theme .modal {
+  background: #0a0a0a;
+  border: 3px solid #1a1a1a;
   border-radius: 20px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.9);
 }
 
-.switch-theme .modal-header {
+.tv-theme .modal-header {
   background: linear-gradient(135deg, #e60012 0%, #ff6b6b 100%);
   border-radius: 17px 17px 0 0;
 }
 
-.switch-theme .modal-header h2 {
+.tv-theme .modal-header h2 {
   color: #ffffff;
 }
 
-.switch-theme .close-btn {
+.tv-theme .close-btn {
   background: rgba(255, 255, 255, 0.2);
   color: #ffffff;
 }
 
-.switch-theme .close-btn:hover {
+.tv-theme .close-btn:hover {
   background: rgba(255, 255, 255, 0.3);
 }
 
-.switch-theme .modal-body {
-  color: #2c2c2c;
+.tv-theme .modal-body {
+  color: #d0d0d0;
 }
 
-.switch-theme .game-info-section h3 {
+.tv-theme .game-info-section h3 {
   color: #e60012;
-  border-bottom-color: #e0e0e0;
+  border-bottom-color: #1a1a1a;
 }
 
-.switch-theme .btn-primary {
+.tv-theme .btn-primary {
   background: #e60012;
   border-color: #e60012;
   color: #ffffff;
 }
 
-.switch-theme .btn-primary:hover {
+.tv-theme .btn-primary:hover {
   background: #ff1a2e;
   border-color: #ff1a2e;
 }
 
-.switch-theme .btn-secondary {
-  background: #f5f5f5;
-  border: 2px solid #e0e0e0;
-  color: #2c2c2c;
+.tv-theme .btn-secondary {
+  background: #1a1a1a;
+  border: 2px solid #2a2a2a;
+  color: #d0d0d0;
 }
 
-.switch-theme .btn-secondary:hover {
-  background: #e8e8e8;
-  border-color: #c0c0c0;
+.tv-theme .btn-secondary:hover {
+  background: #2a2a2a;
+  border-color: #3a3a3a;
 }
 
-.switch-theme .btn-danger {
+.tv-theme .btn-danger {
   background: rgba(255, 107, 107, 0.2);
-  color: #e60012;
+  color: #ff6b6b;
   border-color: rgba(230, 0, 18, 0.4);
 }
 
-.switch-theme .btn-danger:hover {
+.tv-theme .btn-danger:hover {
   background: rgba(255, 107, 107, 0.3);
   border-color: rgba(230, 0, 18, 0.6);
 }
 
-.switch-theme .controller-selected-button {
+.tv-theme .controller-selected-button {
   outline-color: #00d4ff !important;
   box-shadow: 0 0 20px rgba(0, 212, 255, 0.8) !important;
 }
 
-.switch-theme .cover-art-item {
-  border-color: #e0e0e0;
+.tv-theme .cover-art-item {
+  border-color: #1a1a1a;
 }
 
-.switch-theme .cover-art-item:hover {
+.tv-theme .cover-art-item:hover {
   border-color: #e60012;
-  box-shadow: 0 5px 20px rgba(230, 0, 18, 0.3);
+  box-shadow: 0 5px 20px rgba(230, 0, 18, 0.6);
 }
 
-.switch-theme .cover-art-item.controller-selected {
+.tv-theme .cover-art-item.controller-selected {
   outline-color: #00d4ff;
   border-color: #00d4ff;
   box-shadow: 0 8px 25px rgba(0, 212, 255, 0.8);
 }
 
-.switch-theme .warning-banner {
+.tv-theme .warning-banner {
   background: rgba(255, 193, 7, 0.2);
   border-color: #ffc107;
-  color: #856404;
+  color: #ffc107;
 }
 
-.switch-theme .loading,
-.switch-theme .no-games {
+.tv-theme .loading,
+.tv-theme .no-games {
   color: #666;
 }
 
@@ -1030,8 +1030,8 @@ header,
   transition: background 0.3s ease, color 0.3s ease, border-color 0.3s ease;
 }
 
-/* Switch Theme Horizontal Layout */
-.switch-theme .games-grid {
+/* TV Theme Horizontal Layout */
+.tv-theme .games-grid {
   display: flex;
   flex-direction: row;
   gap: 2rem;
@@ -1048,18 +1048,18 @@ header,
 }
 
 /* Hide scrollbar for Chrome/Safari/Opera */
-.switch-theme .games-grid::-webkit-scrollbar {
+.tv-theme .games-grid::-webkit-scrollbar {
   display: none;
 }
 
-.switch-theme .game-card {
+.tv-theme .game-card {
   flex-shrink: 0;
   width: 280px;
   height: 380px;
   transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
   /* Smooth ease-out-quad */
-  opacity: 0.7;
-  /* Dim unselected items */
+  opacity: 0.6;
+  /* Dim unselected items more */
   transform: scale(0.9);
   box-sizing: border-box;
   overflow: hidden;
@@ -1069,25 +1069,24 @@ header,
 }
 
 /* Selected game is larger and fully opaque */
-/* Selected game is larger and fully opaque */
-.switch-theme .game-card.controller-selected,
-.switch-theme .game-card:hover {
+.tv-theme .game-card.controller-selected,
+.tv-theme .game-card:hover {
   width: 420px;
   height: 560px;
   border: 4px solid #00d4ff;
-  box-shadow: 0 12px 40px rgba(0, 212, 255, 0.4);
+  box-shadow: 0 12px 40px rgba(0, 212, 255, 0.5);
   opacity: 1;
   transform: scale(1);
   z-index: 10;
 }
 
-.switch-theme .game-card.controller-selected .game-image,
-.switch-theme .game-card:hover .game-image {
+.tv-theme .game-card.controller-selected .game-image,
+.tv-theme .game-card:hover .game-image {
   height: 480px;
 }
 
-.switch-theme .game-card.controller-selected .game-title,
-.switch-theme .game-card:hover .game-title {
+.tv-theme .game-card.controller-selected .game-title,
+.tv-theme .game-card:hover .game-title {
   font-size: 1.4rem;
   padding: 1.2rem;
 }
