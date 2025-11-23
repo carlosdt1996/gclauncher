@@ -144,7 +144,7 @@ export const getSteamGames = async () => {
                             name: appState.name,
                             installDir: path.join(libPath, 'steamapps', 'common', appState.installdir || appState.installDir),
                             platform: 'steam',
-                            executable: '',
+                            executable: findGameExecutable(path.join(libPath, 'steamapps', 'common', appState.installdir || appState.installDir), appState.name),
                             lastPlayed: appState.LastPlayed || appState.lastplayed || '0'
                         });
                         console.log(`  ✓ Found: ${appState.name} (${appId})`);
@@ -159,3 +159,69 @@ export const getSteamGames = async () => {
     console.log(`\n=== Total games found: ${games.length} ===\n`);
     return games;
 };
+
+/**
+ * Attempt to find the main executable for a game
+ */
+function findGameExecutable(installDir, gameName) {
+    if (!fs.existsSync(installDir)) return '';
+
+    try {
+        // Get all .exe files recursively (limit depth to avoid scanning too much)
+        const exes = [];
+
+        function scanDir(dir, depth = 0) {
+            if (depth > 3) return; // Max depth 3
+
+            const files = fs.readdirSync(dir, { withFileTypes: true });
+
+            for (const file of files) {
+                const fullPath = path.join(dir, file.name);
+
+                if (file.isDirectory()) {
+                    // Skip common non-game folders
+                    const skipFolders = ['redist', 'directx', 'support', 'tools', 'engine', 'crashreporter'];
+                    if (!skipFolders.some(f => file.name.toLowerCase().includes(f))) {
+                        scanDir(fullPath, depth + 1);
+                    }
+                } else if (file.isFile() && file.name.toLowerCase().endsWith('.exe')) {
+                    // Skip common non-game exes
+                    const skipExes = ['unitycrashhandler', 'unins', 'setup', 'config', 'dxsetup', 'vcredist', 'crashreport'];
+                    if (!skipExes.some(e => file.name.toLowerCase().includes(e))) {
+                        exes.push({
+                            name: file.name,
+                            path: fullPath,
+                            size: fs.statSync(fullPath).size
+                        });
+                    }
+                }
+            }
+        }
+
+        scanDir(installDir);
+
+        if (exes.length === 0) return '';
+
+        // Sort by size (descending) - usually the game exe is the largest or one of the largest
+        exes.sort((a, b) => b.size - a.size);
+
+        // 1. Try exact name match
+        const exactMatch = exes.find(e => e.name.toLowerCase() === `${gameName.toLowerCase()}.exe`);
+        if (exactMatch) return exactMatch.name;
+
+        // 2. Try name containment
+        const nameMatch = exes.find(e => e.name.toLowerCase().includes(gameName.toLowerCase().replace(/\s+/g, '')));
+        if (nameMatch) return nameMatch.name;
+
+        // 3. Try "Shipping" exe (common in Unreal Engine games)
+        const shippingMatch = exes.find(e => e.name.toLowerCase().includes('shipping'));
+        if (shippingMatch) return shippingMatch.name;
+
+        // 4. Fallback to largest exe
+        return exes[0].name;
+
+    } catch (error) {
+        console.error(`Error searching for executable in ${installDir}:`, error);
+        return '';
+    }
+}

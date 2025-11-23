@@ -8,13 +8,14 @@ import { fetchGameImage, searchGameDetailed } from './utils/steamgriddb.js';
 import { loginToBackloggd, searchGame, getGameDetails } from './utils/backloggd.js';
 import { searchMetacritic, getMetacriticScore } from './utils/metacritic.js';
 import { checkCrackStatus } from './utils/crackstatus.js';
-import { startSession, endSession, getPlaytime, getAllPlaytimes } from './utils/playtime.js';
+import { startSession, endSession, getPlaytime, getAllPlaytimes, setGameExecutable, getGameExecutable, getAllGameExecutables, endAllActiveSessions } from './utils/playtime.js';
 import { scrapeMainPageGames, scrapeGameDetails, searchGames } from './utils/fitgirl.js';
 import torrentManager from './utils/torrent-manager.js';
 import { getFileReport, calculateFileHash } from './utils/virustotal.js';
 import * as realDebrid from './utils/real-debrid.js';
 import * as torrentSearch from './utils/torrent-search.js';
 import { extractArchive, isArchive } from './utils/extractor.js';
+import processMonitor from './utils/process-monitor.js';
 import os from 'os';
 
 const require = createRequire(import.meta.url);
@@ -186,14 +187,42 @@ app.on('ready', async () => {
     ipcMain.handle('launch-game', async (event, game) => {
         console.log('IPC: Launching game', game.name, game.id);
 
-        // Start playtime tracking for all platforms
-        startSession(game.id, game.name);
-
         try {
             if (game.platform === 'steam') {
+                // For Steam games, we need to detect the executable
+                // Store the game info for process monitoring
+                let executableName = getGameExecutable(game.id);
+
+                // If we don't have the executable stored, try to get it from game data
+                if (!executableName && game.executable) {
+                    executableName = path.basename(game.executable);
+                    setGameExecutable(game.id, executableName);
+                }
+
+                // Register with process monitor if we have an executable
+                if (executableName) {
+                    processMonitor.registerGame(game.id, game.name, executableName);
+                    console.log(`[Launch] Registered ${game.name} for monitoring: ${executableName}`);
+                } else {
+                    console.warn(`[Launch] No executable found for ${game.name}, automatic tracking won't work`);
+                }
+
                 // Use Steam protocol to launch game
                 await shell.openExternal(`steam://run/${game.id}`);
                 return { success: true };
+            } else if (game.platform === 'custom') {
+                // For custom games, we should have the executable path
+                if (game.executable) {
+                    const executableName = path.basename(game.executable);
+                    setGameExecutable(game.id, executableName);
+                    processMonitor.registerGame(game.id, game.name, executableName);
+                    console.log(`[Launch] Registered custom game ${game.name}: ${executableName}`);
+
+                    // Launch the game
+                    await shell.openPath(game.executable);
+                    return { success: true };
+                }
+                return { success: false, error: 'No executable path for custom game' };
             }
             return { success: false, error: 'Unsupported platform' };
         } catch (error) {
@@ -280,6 +309,17 @@ app.on('ready', async () => {
 
     ipcMain.handle('get-all-playtimes', async () => {
         return getAllPlaytimes();
+    });
+
+    ipcMain.handle('clear-all-playtimes', async () => {
+        try {
+            store.delete('playtime_sessions');
+            console.log('[Playtime] All sessions cleared');
+            return { success: true };
+        } catch (error) {
+            console.error('[Playtime] Error clearing sessions:', error);
+            return { success: false, error: error.message };
+        }
     });
 
     // FitGirl Repacks handlers
@@ -679,6 +719,72 @@ app.on('ready', async () => {
 
     createWindow();
 
+    // Initialize process monitor for automatic session tracking
+    console.log('[ProcessMonitor] Initializing automatic session tracking...');
+
+    // Set up event handlers
+    processMonitor.on('game-started', ({ gameId, gameName }) => {
+        console.log(`[ProcessMonitor] Game started: ${gameName}`);
+        startSession(gameId, gameName);
+
+        // Minimize window when game starts
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.minimize();
+            console.log('[Window] Minimized launcher window');
+
+            // Notify frontend to disable controller (optional, keeping logic ready)
+            // mainWindow.webContents.send('controller-disable');
+        }
+    });
+
+    processMonitor.on('game-stopped', ({ gameId, gameName }) => {
+        console.log(`[ProcessMonitor] Game stopped: ${gameName}`);
+        endSession(gameId);
+
+        // Restore and focus window when game stops
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            if (mainWindow.isMinimized()) mainWindow.restore();
+            mainWindow.focus();
+            console.log('[Window] Restored and focused launcher window');
+
+            // Notify frontend to refresh playtime
+            mainWindow.webContents.send('controller-enable'); // Using this event to trigger refresh
+        }
+    });
+
+    // Register all games that have executables stored
+    setTimeout(async () => {
+        try {
+            const games = await getSteamGames();
+            const customGames = store.get('customGames') || [];
+            const allGames = [...games, ...customGames];
+            const executables = getAllGameExecutables();
+
+            console.log('[ProcessMonitor] Registering games with stored executables...');
+            for (const game of allGames) {
+                let executableName = executables[game.id];
+
+                // If not stored, try to use the one auto-detected from Steam
+                if (!executableName && game.executable) {
+                    executableName = game.executable;
+                    // Optionally store it for next time, though we re-scan on startup anyway
+                    setGameExecutable(game.id, executableName);
+                }
+
+                if (executableName) {
+                    processMonitor.registerGame(game.id, game.name, executableName);
+                    console.log(`[ProcessMonitor] Registered: ${game.name} -> ${executableName}`);
+                }
+            }
+
+            // Start monitoring
+            processMonitor.start();
+            console.log('[ProcessMonitor] Automatic session tracking started!');
+        } catch (error) {
+            console.error('[ProcessMonitor] Error during initialization:', error);
+        }
+    }, 2000); // Wait 2 seconds for app to fully initialize
+
     // Test Steam detection in background (non-blocking)
     setTimeout(async () => {
         console.log('=== Testing Steam Detection (Background) ===');
@@ -697,8 +803,19 @@ app.on('ready', async () => {
 // Quit when all windows are closed, except on macOS.
 app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
+        // Clean up before quitting
+        console.log('[App] Cleaning up before quit...');
+        processMonitor.stop();
+        endAllActiveSessions();
         app.quit();
     }
+});
+
+// Handle app quit
+app.on('before-quit', () => {
+    console.log('[App] App is quitting, ending all active sessions...');
+    processMonitor.stop();
+    endAllActiveSessions();
 });
 
 app.on('activate', () => {

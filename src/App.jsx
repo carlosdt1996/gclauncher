@@ -418,7 +418,7 @@ function App() {
     if (availableCovers.length > 0 && selectedCoverIndex >= 0 && selectedGame) {
       const newCoverUrl = availableCovers[selectedCoverIndex];
       setImages(prev => ({ ...prev, [selectedGame.id]: newCoverUrl }));
-      
+
       // Save the cover art to persistent storage
       if (window.electronAPI && window.electronAPI.setGameImage) {
         try {
@@ -428,7 +428,7 @@ function App() {
           console.error('Error saving cover art:', error);
         }
       }
-      
+
       setShowCoverArtSelector(false);
       // Removed alert to avoid losing focus
     }
@@ -1764,9 +1764,9 @@ function App() {
                               borderRadius: '6px',
                               boxShadow: '0 2px 8px rgba(0, 0, 0, 0.4)'
                             }}>
-                              <img 
-                                src="https://store.fastly.steamstatic.com/public/shared/images/header/logo_steam.svg?t=962016" 
-                                alt="Steam" 
+                              <img
+                                src="https://store.fastly.steamstatic.com/public/shared/images/header/logo_steam.svg?t=962016"
+                                alt="Steam"
                                 style={{ width: '80px', height: 'auto' }}
                               />
                             </div>

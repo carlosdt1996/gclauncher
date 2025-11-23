@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     endSession: (gameId) => ipcRenderer.invoke('end-session', gameId),
     getPlaytime: (gameId) => ipcRenderer.invoke('get-playtime', gameId),
     getAllPlaytimes: () => ipcRenderer.invoke('get-all-playtimes'),
+    clearAllPlaytimes: () => ipcRenderer.invoke('clear-all-playtimes'),
     // FitGirl Repacks
     fitgirlGetGames: () => ipcRenderer.invoke('fitgirl-get-games'),
     fitgirlSearch: (query) => ipcRenderer.invoke('fitgirl-search', query),

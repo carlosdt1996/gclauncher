@@ -65,3 +65,47 @@ export function getActiveSession(gameId) {
     const sessions = store.get('playtime_sessions', {});
     return sessions[gameId]?.currentSession || null;
 }
+
+/**
+ * Store the executable name for a game
+ */
+export function setGameExecutable(gameId, executableName) {
+    const executables = store.get('game_executables', {});
+    executables[gameId] = executableName;
+    store.set('game_executables', executables);
+    console.log(`[Playtime] Stored executable for ${gameId}: ${executableName}`);
+}
+
+/**
+ * Get the executable name for a game
+ */
+export function getGameExecutable(gameId) {
+    const executables = store.get('game_executables', {});
+    return executables[gameId] || null;
+}
+
+/**
+ * Get all game executables
+ */
+export function getAllGameExecutables() {
+    return store.get('game_executables', {});
+}
+
+/**
+ * End all active sessions (called on app shutdown)
+ */
+export function endAllActiveSessions() {
+    const sessions = store.get('playtime_sessions', {});
+    let endedCount = 0;
+
+    for (const gameId in sessions) {
+        if (sessions[gameId].currentSession) {
+            endSession(gameId);
+            endedCount++;
+        }
+    }
+
+    if (endedCount > 0) {
+        console.log(`[Playtime] Ended ${endedCount} active session(s) on shutdown`);
+    }
+}
