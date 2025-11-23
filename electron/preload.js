@@ -63,4 +63,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getVirustotalApiKey: () => ipcRenderer.invoke('get-virustotal-api-key'),
     scanFileVirustotal: (filePath) => ipcRenderer.invoke('scan-file-virustotal', filePath),
     scanHashVirustotal: (hash) => ipcRenderer.invoke('scan-hash-virustotal', hash),
+    // Window controls
+    toggleFullscreen: () => ipcRenderer.invoke('toggle-fullscreen'),
 });

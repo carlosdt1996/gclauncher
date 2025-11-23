@@ -672,6 +672,16 @@ app.on('ready', async () => {
         }
     });
 
+    // Window controls
+    ipcMain.handle('toggle-fullscreen', async () => {
+        if (mainWindow) {
+            const isFullScreen = mainWindow.isFullScreen();
+            mainWindow.setFullScreen(!isFullScreen);
+            return !isFullScreen;
+        }
+        return false;
+    });
+
     // Installer handler
     ipcMain.handle('run-installer', async (event, folderPath) => {
         try {

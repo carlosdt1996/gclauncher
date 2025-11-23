@@ -36,6 +36,7 @@ function App() {
   const [tempVirustotalApiKey, setTempVirustotalApiKey] = useState('');
   const [theme, setTheme] = useState('pc'); // 'pc' or 'tv'
   const themeRef = useRef('pc');
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   useEffect(() => {
     themeRef.current = theme;
@@ -1007,6 +1008,7 @@ function App() {
   const showGameDetailsRef = useRef(showGameDetails);
   const showCoverArtSelectorRef = useRef(showCoverArtSelector);
   const availableCoversRef = useRef(availableCovers);
+  const showSettingsRef = useRef(showSettings);
 
   // Keep refs in sync
   useEffect(() => {
@@ -1027,6 +1029,9 @@ function App() {
   useEffect(() => {
     showCoverArtSelectorRef.current = showCoverArtSelector;
   }, [showCoverArtSelector]);
+  useEffect(() => {
+    showSettingsRef.current = showSettings;
+  }, [showSettings]);
   useEffect(() => {
     availableCoversRef.current = availableCovers;
   }, [availableCovers]);
@@ -1508,6 +1513,10 @@ function App() {
         handleCloseCoverArtSelector();
         return;
       }
+      if (showSettingsRef.current) {
+        setShowSettings(false);
+        return;
+      }
       if (showGameDetailsRef.current || showDownloadManager) {
         setShowGameDetails(false);
         setShowDownloadManager(false);
@@ -1539,8 +1548,19 @@ function App() {
       }
     });
 
-    onButtonPress(0, 9, () => { // Start button - Settings
-      setShowSettings(true);
+    onButtonPress(0, 9, () => { // Start button - Toggle Settings
+      setShowSettings(prev => !prev);
+    });
+
+    onButtonPress(0, 6, async () => { // L2 / LT - Toggle Fullscreen
+      try {
+        if (window.electronAPI?.toggleFullscreen) {
+          const newFullscreenState = await window.electronAPI.toggleFullscreen();
+          setIsFullscreen(newFullscreenState);
+        }
+      } catch (error) {
+        console.error('Error toggling fullscreen with L2:', error);
+      }
     });
 
     onButtonPress(0, 7, () => { // R2 / RT - Toggle Theme
@@ -1692,6 +1712,28 @@ function App() {
           </button>
           <button className="settings-btn" onClick={() => setShowSettings(true)}>
             Settings
+          </button>
+          <button
+            className="fullscreen-btn"
+            onClick={async () => {
+              try {
+                console.log('Toggling fullscreen...');
+                if (!window.electronAPI?.toggleFullscreen) {
+                  console.error('toggleFullscreen API not available');
+                  alert('Fullscreen API not available. Please restart the app.');
+                  return;
+                }
+                const newFullscreenState = await window.electronAPI.toggleFullscreen();
+                console.log('New fullscreen state:', newFullscreenState);
+                setIsFullscreen(newFullscreenState);
+              } catch (error) {
+                console.error('Error toggling fullscreen:', error);
+                alert('Error toggling fullscreen: ' + error.message);
+              }
+            }}
+            title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
+          >
+            {isFullscreen ? '🗗' : '⛶'}
           </button>
         </div>
       </header>
