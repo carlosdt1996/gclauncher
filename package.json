@@ -2,6 +2,8 @@
   "name": "gclauncher",
   "private": true,
   "version": "1.0.0",
+  "description": "A game launcher that has the ability to download games from torrent and integrate them to the library",
+  "author": "GC Launcher",
   "main": "electron/main.js",
   "type": "module",
   "scripts": {
@@ -69,10 +71,10 @@
           "arch": ["x64"]
         }
       ],
-      "icon": "public/logo.png",
       "publisherName": "GC Launcher",
       "requestedExecutionLevel": "asInvoker"
     },
+    "compression": "normal",
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
@@ -80,13 +82,9 @@
       "createStartMenuShortcut": true,
       "shortcutName": "GC Game Launcher",
       "include": "build/installer.nsh",
-      "installerIcon": "public/logo.png",
-      "uninstallerIcon": "public/logo.png",
-      "installerHeaderIcon": "public/logo.png",
       "deleteAppDataOnUninstall": false,
       "runAfterFinish": true,
       "menuCategory": "Games"
-    },
-    "icon": "public/logo.png"
+    }
   }
 }
