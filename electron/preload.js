@@ -1,0 +1,65 @@
+const { contextBridge, ipcRenderer } = require('electron');
+
+contextBridge.exposeInMainWorld('electronAPI', {
+    // Add API methods here
+    ping: () => ipcRenderer.invoke('ping'),
+    getGames: () => ipcRenderer.invoke('get-games'),
+    getApiKey: () => ipcRenderer.invoke('get-api-key'),
+    setApiKey: (key) => ipcRenderer.invoke('set-api-key', key),
+    getGameImage: (gameNameOrId, gameName) => ipcRenderer.invoke('get-game-image', gameNameOrId, gameName),
+    setGameImage: (gameId, imageUrl) => ipcRenderer.invoke('set-game-image', { gameId, imageUrl }),
+    launchGame: (game) => ipcRenderer.invoke('launch-game', game),
+    backloggdLogin: () => ipcRenderer.invoke('backloggd-login'),
+    getBackloggdUser: () => ipcRenderer.invoke('backloggd-get-user'),
+    backloggdGetDetails: (gameName) => ipcRenderer.invoke('backloggd-get-details', gameName),
+    checkCrackStatus: (gameName) => ipcRenderer.invoke('check-crack-status', gameName),
+    endSession: (gameId) => ipcRenderer.invoke('end-session', gameId),
+    getPlaytime: (gameId) => ipcRenderer.invoke('get-playtime', gameId),
+    getAllPlaytimes: () => ipcRenderer.invoke('get-all-playtimes'),
+    // FitGirl Repacks
+    fitgirlGetGames: () => ipcRenderer.invoke('fitgirl-get-games'),
+    fitgirlSearch: (query) => ipcRenderer.invoke('fitgirl-search', query),
+    fitgirlGetDetails: (pageUrl) => ipcRenderer.invoke('fitgirl-get-details', pageUrl),
+    // Torrent downloads
+    startDownload: (magnetLink, gameName) => ipcRenderer.invoke('start-download', { magnetLink, gameName }),
+    pauseDownload: (infoHash) => ipcRenderer.invoke('pause-download', infoHash),
+    resumeDownload: (infoHash) => ipcRenderer.invoke('resume-download', infoHash),
+    cancelDownload: (infoHash) => ipcRenderer.invoke('cancel-download', infoHash),
+    getDownloadProgress: (infoHash) => ipcRenderer.invoke('get-download-progress', infoHash),
+    getAllDownloads: () => ipcRenderer.invoke('get-all-downloads'),
+    setDownloadPath: (path) => ipcRenderer.invoke('set-download-path', path),
+    onDownloadProgress: (callback) => ipcRenderer.on('download-progress', (event, data) => callback(data)),
+    // Real-Debrid settings
+    setRdApiKey: (key) => ipcRenderer.invoke('set-rd-api-key', key),
+    getRdApiKey: () => ipcRenderer.invoke('get-rd-api-key'),
+    setDownloadFolder: (folder) => ipcRenderer.invoke('set-download-folder', folder),
+    getDownloadFolder: () => ipcRenderer.invoke('get-download-folder'),
+    setInstallFolder: (folder) => ipcRenderer.invoke('set-install-folder', folder),
+    getInstallFolder: () => ipcRenderer.invoke('get-install-folder'),
+    // Custom Games & Installer
+    addCustomGame: (game) => ipcRenderer.invoke('add-custom-game', game),
+    removeCustomGame: (gameId) => ipcRenderer.invoke('remove-custom-game', gameId),
+    runInstaller: (folderPath) => ipcRenderer.invoke('run-installer', folderPath),
+    extractArchive: (filePath, outputDir) => ipcRenderer.invoke('extract-archive', { filePath, outputDir }),
+    onExtractionProgress: (callback) => ipcRenderer.on('extraction-progress', (event, data) => callback(data)),
+    // Real-Debrid
+    rdAddMagnet: (magnetLink, apiKey) => ipcRenderer.invoke('rd-add-magnet', { magnetLink, apiKey }),
+    rdGetTorrentInfo: (torrentId, apiKey) => ipcRenderer.invoke('rd-get-torrent-info', { torrentId, apiKey }),
+    rdSelectFiles: (torrentId, fileIds, apiKey) => ipcRenderer.invoke('rd-select-files', { torrentId, fileIds, apiKey }),
+    rdGetUnrestrictedLink: (link, apiKey) => ipcRenderer.invoke('rd-get-unrestricted-link', { link, apiKey }),
+    rdDownloadFile: (url, filename, downloadPath) => ipcRenderer.invoke('rd-download-file', { url, filename, downloadPath }),
+    rdCancelDownload: (filename) => ipcRenderer.invoke('rd-cancel-download', { filename }),
+    rdDeleteTorrent: (torrentId, apiKey) => ipcRenderer.invoke('rd-delete-torrent', { torrentId, apiKey }),
+    onRdDownloadProgress: (callback) => ipcRenderer.on('rd-download-progress', (event, data) => callback(data)),
+    // Torrent Search
+    searchGameSteamGrid: (gameName) => ipcRenderer.invoke('search-game-steamgrid', gameName),
+    getGameCovers: (gameName) => ipcRenderer.invoke('get-game-covers', gameName),
+    searchTorrents: (gameName, options) => ipcRenderer.invoke('search-torrents', { gameName, options }),
+    getTorrentDetails: (detailUrl, source) => ipcRenderer.invoke('get-torrent-details', { detailUrl, source }),
+    openExternal: (url) => ipcRenderer.invoke('open-external', url),
+    // VirusTotal
+    setVirustotalApiKey: (key) => ipcRenderer.invoke('set-virustotal-api-key', key),
+    getVirustotalApiKey: () => ipcRenderer.invoke('get-virustotal-api-key'),
+    scanFileVirustotal: (filePath) => ipcRenderer.invoke('scan-file-virustotal', filePath),
+    scanHashVirustotal: (hash) => ipcRenderer.invoke('scan-hash-virustotal', hash),
+});
