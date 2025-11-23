@@ -1,12 +1,14 @@
 {
   "name": "gclauncher",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "main": "electron/main.js",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k \"cross-env BROWSER=none vite\" \"wait-on tcp:5173 && electron .\"",
     "build": "vite build && electron-builder",
+    "build:win": "vite build && electron-builder --win",
+    "build:win:portable": "vite build && electron-builder --win portable",
     "lint": "eslint .",
     "preview": "vite preview"
   },
@@ -41,18 +43,49 @@
   "build": {
     "appId": "com.gclauncher.app",
     "productName": "GC Game Launcher",
+    "copyright": "Copyright © 2025",
     "directories": {
-      "output": "dist-build"
+      "output": "dist-build",
+      "buildResources": "build"
     },
     "files": [
       "dist/**/*",
       "electron/**/*",
       "package.json",
-      "public/logo.png"
+      "public/logo.png",
+      "public/steam-logo-transparent.png"
+    ],
+    "extraFiles": [
+      {
+        "from": "electron/bin/7z",
+        "to": "electron/bin/7z",
+        "filter": ["**/*"]
+      }
     ],
     "win": {
-      "target": "nsis",
-      "icon": "public/logo.png"
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "public/logo.png",
+      "publisherName": "GC Launcher",
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "GC Game Launcher",
+      "include": "build/installer.nsh",
+      "installerIcon": "public/logo.png",
+      "uninstallerIcon": "public/logo.png",
+      "installerHeaderIcon": "public/logo.png",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true,
+      "menuCategory": "Games"
     },
     "icon": "public/logo.png"
   }

@@ -1,16 +1,58 @@
-# React + Vite
+# GC Game Launcher
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Un launcher de juegos que permite descargar juegos desde torrents e integrarlos a tu biblioteca.
 
-Currently, two official plugins are available:
+## Características
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- 🎮 Integración con Steam
+- 📥 Descarga de juegos desde torrents
+- 🖼️ Portadas personalizables desde SteamGridDB
+- 🎯 Soporte para controladores/gamepads
+- 🎨 Temas personalizables (Dark y Switch)
+- 📊 Seguimiento de tiempo de juego
+- 🔍 Búsqueda de juegos en múltiples fuentes
 
-## React Compiler
+## Instalación para Usuarios
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### Requisitos
+- Windows 10 o superior (64 bits)
+- 200 MB de espacio libre
+- 2 GB de RAM mínimo
 
-## Expanding the ESLint configuration
+### Pasos de Instalación
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+1. Descarga el instalador `GC Game Launcher Setup 1.0.0.exe`
+2. Ejecuta el instalador
+3. Sigue el asistente de instalación
+4. ¡Listo! La aplicación se abrirá automáticamente
+
+Para instrucciones detalladas, consulta [INSTALACION_USUARIO.md](./INSTALACION_USUARIO.md)
+
+## Desarrollo
+
+### Requisitos
+- Node.js 18+
+- npm o yarn
+
+### Instalación
+```bash
+npm install
+```
+
+### Desarrollo
+```bash
+npm run dev
+```
+
+### Crear Instalador
+```bash
+npm run build:win
+```
+
+Para más información sobre desarrollo y distribución, consulta:
+- [BUILD_INSTRUCTIONS.md](./BUILD_INSTRUCTIONS.md) - Instrucciones para crear el instalador
+- [DISTRIBUCION.md](./DISTRIBUCION.md) - Guía de distribución
+
+## Licencia
+
+Este proyecto es privado.
