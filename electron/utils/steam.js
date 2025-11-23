@@ -166,59 +166,131 @@ export const getSteamGames = async () => {
 function findGameExecutable(installDir, gameName) {
     if (!fs.existsSync(installDir)) return '';
 
+    const isDebugTarget = gameName.toLowerCase().includes('where winds meet');
+
     try {
-        // Get all .exe files recursively (limit depth to avoid scanning too much)
-        const exes = [];
+        if (isDebugTarget) console.log(`[ExeSearch] 🔍 Searching in: ${installDir} for "${gameName}"`);
 
-        function scanDir(dir, depth = 0) {
-            if (depth > 3) return; // Max depth 3
+        // Helper to scan directories
+        function getExecutables(startDir, maxDepth, aggressiveFilters = true) {
+            const results = [];
 
-            const files = fs.readdirSync(dir, { withFileTypes: true });
+            function scan(dir, depth) {
+                if (depth > maxDepth) return;
 
-            for (const file of files) {
-                const fullPath = path.join(dir, file.name);
+                let files;
+                try {
+                    files = fs.readdirSync(dir, { withFileTypes: true });
+                } catch (e) {
+                    return;
+                }
 
-                if (file.isDirectory()) {
-                    // Skip common non-game folders
-                    const skipFolders = ['redist', 'directx', 'support', 'tools', 'engine', 'crashreporter'];
-                    if (!skipFolders.some(f => file.name.toLowerCase().includes(f))) {
-                        scanDir(fullPath, depth + 1);
-                    }
-                } else if (file.isFile() && file.name.toLowerCase().endsWith('.exe')) {
-                    // Skip common non-game exes
-                    const skipExes = ['unitycrashhandler', 'unins', 'setup', 'config', 'dxsetup', 'vcredist', 'crashreport'];
-                    if (!skipExes.some(e => file.name.toLowerCase().includes(e))) {
-                        exes.push({
-                            name: file.name,
-                            path: fullPath,
-                            size: fs.statSync(fullPath).size
-                        });
+                for (const file of files) {
+                    const fullPath = path.join(dir, file.name);
+
+                    if (file.isDirectory()) {
+                        const nameLower = file.name.toLowerCase();
+
+                        // Aggressive filters (First pass)
+                        let skipFolders = ['redist', 'directx', 'commonredist', 'prerequisites', 'install', 'artbook', 'soundtrack'];
+
+                        if (aggressiveFilters) {
+                            skipFolders = [...skipFolders, 'support', 'tools', 'crashreporter', 'update', 'docs', 'manual'];
+                        }
+
+                        if (!skipFolders.some(f => nameLower.includes(f))) {
+                            scan(fullPath, depth + 1);
+                        } else if (isDebugTarget && aggressiveFilters) {
+                            console.log(`[ExeDebug] Skipping folder (Pass 1): ${file.name}`);
+                        }
+                    } else if (file.isFile() && file.name.toLowerCase().endsWith('.exe')) {
+                        const nameLower = file.name.toLowerCase();
+                        // Minimal exe blacklist
+                        const skipExes = ['unitycrashhandler', 'unins', 'uninstall', 'dxsetup', 'vcredist', 'crashreport'];
+
+                        if (!skipExes.some(e => nameLower.includes(e))) {
+                            results.push({
+                                name: file.name,
+                                path: fullPath,
+                                size: fs.statSync(fullPath).size,
+                                depth: depth
+                            });
+                        }
                     }
                 }
             }
+
+            scan(startDir, 0);
+            return results;
         }
 
-        scanDir(installDir);
+        // PASS 1: Standard scan (Depth 5, Aggressive Filters)
+        let exes = getExecutables(installDir, 5, true);
 
-        if (exes.length === 0) return '';
+        // PASS 2: Deep scan if nothing found (Depth 8, Relaxed Filters)
+        if (exes.length === 0) {
+            if (isDebugTarget) console.log('[ExeSearch] ⚠️ No exes found in Pass 1. Starting Deep Scan...');
+            exes = getExecutables(installDir, 8, false);
+        }
 
-        // Sort by size (descending) - usually the game exe is the largest or one of the largest
-        exes.sort((a, b) => b.size - a.size);
+        if (exes.length === 0) {
+            console.log(`[ExeSearch] ❌ Absolutely no executables found in ${installDir}`);
+            return '';
+        }
 
-        // 1. Try exact name match
-        const exactMatch = exes.find(e => e.name.toLowerCase() === `${gameName.toLowerCase()}.exe`);
-        if (exactMatch) return exactMatch.name;
+        if (isDebugTarget) console.log(`[ExeSearch] Found ${exes.length} candidates. Scoring...`);
 
-        // 2. Try name containment
-        const nameMatch = exes.find(e => e.name.toLowerCase().includes(gameName.toLowerCase().replace(/\s+/g, '')));
-        if (nameMatch) return nameMatch.name;
+        // Generate acronyms
+        const words = gameName.toLowerCase().split(/[^a-z0-9]+/);
+        const acronym = words.map(w => w[0]).join('');
 
-        // 3. Try "Shipping" exe (common in Unreal Engine games)
-        const shippingMatch = exes.find(e => e.name.toLowerCase().includes('shipping'));
-        if (shippingMatch) return shippingMatch.name;
+        // Scoring system
+        const scoredExes = exes.map(exe => {
+            let score = 0;
+            const nameLower = exe.name.toLowerCase();
+            const nameNoExt = nameLower.replace('.exe', '');
+            const pathLower = exe.path.toLowerCase();
+            const gameNameLower = gameName.toLowerCase().replace(/[^a-z0-9]/g, '');
 
-        // 4. Fallback to largest exe
-        return exes[0].name;
+            // 1. "Shipping" (Unreal Engine)
+            if (nameLower.includes('shipping')) score += 50;
+
+            // 2. Exact name match
+            if (nameLower === `${gameNameLower}.exe`) score += 40;
+
+            // 3. Acronym match
+            if (nameNoExt === acronym) score += 45;
+            else if (nameNoExt.startsWith(acronym)) score += 25;
+
+            // 4. Contains game name
+            if (nameLower.includes(gameNameLower)) score += 30;
+
+            // 5. Folder heuristics
+            if (pathLower.includes('binaries') && pathLower.includes('win64')) score += 25;
+            else if (pathLower.includes('binaries')) score += 15;
+
+            // 6. Penalties
+            if (nameLower.includes('server')) score -= 50;
+            if (nameLower.includes('client')) score -= 10;
+            if (nameLower.includes('crash')) score -= 20;
+
+            // 7. Size score (max 20 points)
+            score += Math.min(20, exe.size / (1024 * 1024 * 5));
+
+            return { ...exe, score };
+        });
+
+        // Sort by score descending
+        scoredExes.sort((a, b) => b.score - a.score);
+
+        if (isDebugTarget) {
+            console.log(`[ExeSearch] Top candidates for ${gameName}:`);
+            scoredExes.slice(0, 5).forEach(e =>
+                console.log(`  - ${e.name} (Score: ${e.score.toFixed(1)}, Path: ${e.path})`)
+            );
+        }
+
+        return scoredExes[0].name;
 
     } catch (error) {
         console.error(`Error searching for executable in ${installDir}:`, error);
