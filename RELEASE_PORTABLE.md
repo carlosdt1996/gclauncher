@@ -2,8 +2,8 @@
 
 ## Archivo Portable Generado
 
-✅ **Archivo**: `GC Game Launcher 1.0.0.exe`  
-✅ **Ubicación**: `dist-build/GC Game Launcher 1.0.0.exe`  
+✅ **Archivo**: `GC Game Launcher 1.0.1.exe`  
+✅ **Ubicación**: `dist-build/GC Game Launcher 1.0.1.exe`  
 ✅ **Tamaño**: ~80.3 MB  
 ✅ **Tipo**: Portable (no requiere instalación)
 
@@ -16,12 +16,12 @@
 
 ### Paso 2: Configura el Release
 
-- **Tag version**: Selecciona `v1.0.0-portable` (debe aparecer en el dropdown)
-- **Release title**: `GC Game Launcher v1.0.0 - Portable Edition`
+- **Tag version**: Selecciona `v1.0.1-portable` (debe aparecer en el dropdown)
+- **Release title**: `GC Game Launcher v1.0.1 - Portable Edition`
 - **Description**: Copia y pega el siguiente texto:
 
 ```markdown
-# GC Game Launcher v1.0.0 - Portable Edition
+# GC Game Launcher v1.0.1 - Portable Edition
 
 ## 🚀 Versión Portable
 
@@ -37,7 +37,7 @@ Esta es la versión portable del launcher. **No requiere instalación** - solo d
 
 ## 📥 Cómo Usar
 
-1. **Descarga** el archivo `GC Game Launcher 1.0.0.exe`
+1. **Descarga** el archivo `GC Game Launcher 1.0.1.exe`
 2. **Ejecuta** el archivo directamente (doble clic)
 3. **¡Listo!** La aplicación se abrirá inmediatamente
 
@@ -71,7 +71,7 @@ Por favor, prueba la versión portable y reporta cualquier problema en los [Issu
 
 ## 📚 Más Información
 
-- [Versión Instalable](https://github.com/carlosdt1996/gclauncher/releases/tag/v1.0.0)
+- [Versión Instalable](https://github.com/carlosdt1996/gclauncher/releases/tag/v1.0.1)
 - [Guía de Instalación](./INSTALACION_USUARIO.md)
 - [Guía de Pruebas](./TEST_INSTALADOR.md)
 
@@ -84,7 +84,7 @@ Por favor, prueba la versión portable y reporta cualquier problema en los [Issu
 
 1. En la sección "Attach binaries", haz clic en "selecting them"
 2. Navega a: `gclauncher/dist-build/`
-3. Selecciona: `GC Game Launcher 1.0.0.exe`
+3. Selecciona: `GC Game Launcher 1.0.1.exe`
 4. Arrastra y suelta el archivo o haz clic para seleccionarlo
 
 ### Paso 4: Publica el Release
@@ -102,11 +102,11 @@ Después de publicar, verifica que:
 
 ## Enlaces Útiles
 
-- **Release**: https://github.com/carlosdt1996/gclauncher/releases/tag/v1.0.0-portable
+- **Release**: https://github.com/carlosdt1996/gclauncher/releases/tag/v1.0.1-portable
 - **Descarga directa**: (se generará automáticamente después de publicar)
 
 ---
 
-**Nota**: El tag `v1.0.0-portable` ya está creado y subido al repositorio. Solo necesitas crear el release desde la interfaz web de GitHub.
+**Nota**: El tag `v1.0.1-portable` ya está creado y subido al repositorio. Solo necesitas crear el release desde la interfaz web de GitHub.
 
 

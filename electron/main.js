@@ -18,6 +18,7 @@ import { extractArchive, isArchive, findMainArchive } from './utils/extractor.js
 import processMonitor from './utils/process-monitor.js';
 import os from 'os';
 import fs from 'fs';
+import { exec } from 'child_process';
 
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -93,11 +94,160 @@ app.on('ready', async () => {
         return { success: false, error: 'Game already exists' };
     });
 
+    /**
+     * Find uninstaller executables in a directory
+     */
+    function findUninstaller(dirPath, maxDepth = 3, currentDepth = 0) {
+        const uninstallers = [];
+        if (currentDepth >= maxDepth) return uninstallers;
+
+        try {
+            if (!fs.existsSync(dirPath)) return uninstallers;
+
+            const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+            
+            for (const entry of entries) {
+                const fullPath = path.join(dirPath, entry.name);
+                
+                if (entry.isFile()) {
+                    const ext = path.extname(entry.name).toLowerCase();
+                    if (['.exe', '.bat', '.cmd'].includes(ext)) {
+                        const nameLower = entry.name.toLowerCase();
+                        // Look for uninstaller patterns
+                        if (nameLower.includes('uninstall') || 
+                            nameLower.includes('unins') ||
+                            (nameLower.includes('remove') && nameLower.includes('game'))) {
+                            uninstallers.push(fullPath);
+                        }
+                    }
+                } else if (entry.isDirectory()) {
+                    // Search subdirectories, but skip obvious non-game folders
+                    const nameLower = entry.name.toLowerCase();
+                    if (!nameLower.includes('redist') && 
+                        !nameLower.includes('_redist') &&
+                        !nameLower.includes('directx') &&
+                        !nameLower.includes('vcredist') &&
+                        !nameLower.includes('dotnet') &&
+                        !nameLower.includes('temp') &&
+                        !nameLower.includes('tmp')) {
+                        uninstallers.push(...findUninstaller(fullPath, maxDepth, currentDepth + 1));
+                    }
+                }
+            }
+        } catch (error) {
+            console.error(`[FindUninstaller] Error scanning ${dirPath}:`, error);
+        }
+
+        return uninstallers;
+    }
+
     ipcMain.handle('remove-custom-game', async (event, gameId) => {
         const customGames = store.get('customGames') || [];
-        const filtered = customGames.filter(g => g.id !== gameId);
-        store.set('customGames', filtered);
-        return { success: true };
+        const game = customGames.find(g => g.id === gameId);
+        
+        if (!game) {
+            return { success: false, error: 'Game not found' };
+        }
+
+        // If it's a custom game with an install directory, try to find and run uninstaller
+        if (game.platform === 'custom' && game.installDir && fs.existsSync(game.installDir)) {
+            console.log(`[Uninstall] Looking for uninstaller in: ${game.installDir}`);
+            const uninstallers = findUninstaller(game.installDir, 3, 0);
+            
+            if (uninstallers.length > 0) {
+                const uninstallerPath = uninstallers[0]; // Use first found
+                console.log(`[Uninstall] Found uninstaller: ${uninstallerPath}`);
+                
+                // Launch the uninstaller
+                console.log('[Uninstall] Launching uninstaller...');
+                await shell.openPath(uninstallerPath);
+                
+                // Get the uninstaller process name
+                const uninstallerProcessName = path.basename(uninstallerPath);
+                
+                // Wait for uninstaller to finish
+                console.log('[Uninstall] Waiting for uninstaller to finish...');
+                try {
+                    await waitForProcessToFinish(uninstallerProcessName);
+                    console.log('[Uninstall] Uninstaller finished');
+                    
+                    // Wait a bit for files to be deleted
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    
+                    // Check if game folder still exists
+                    const gameFolderExists = fs.existsSync(game.installDir);
+                    
+                    if (!gameFolderExists) {
+                        console.log('[Uninstall] Game folder removed, removing from library');
+                        // Remove from library
+                        const filtered = customGames.filter(g => g.id !== gameId);
+                        store.set('customGames', filtered);
+                        
+                        // Notify frontend
+                        if (mainWindow && !mainWindow.isDestroyed()) {
+                            mainWindow.webContents.send('games-updated');
+                        }
+                        
+                        return { 
+                            success: true, 
+                            uninstallerUsed: true, 
+                            folderRemoved: true,
+                            message: 'Game uninstalled and removed from library'
+                        };
+                    } else {
+                        console.log('[Uninstall] Game folder still exists after uninstaller');
+                        // Ask user or just remove from library anyway
+                        // For now, we'll remove from library but note that files remain
+                        const filtered = customGames.filter(g => g.id !== gameId);
+                        store.set('customGames', filtered);
+                        
+                        if (mainWindow && !mainWindow.isDestroyed()) {
+                            mainWindow.webContents.send('games-updated');
+                        }
+                        
+                        return { 
+                            success: true, 
+                            uninstallerUsed: true, 
+                            folderRemoved: false,
+                            message: 'Uninstaller finished, but game folder still exists. Removed from library.'
+                        };
+                    }
+                } catch (error) {
+                    console.error('[Uninstall] Error waiting for uninstaller:', error);
+                    // Still remove from library if user wants
+                    return { 
+                        success: false, 
+                        error: `Uninstaller may still be running: ${error.message}`,
+                        uninstallerUsed: true
+                    };
+                }
+            } else {
+                console.log('[Uninstall] No uninstaller found, just removing from library');
+                // No uninstaller found, just remove from library
+                const filtered = customGames.filter(g => g.id !== gameId);
+                store.set('customGames', filtered);
+                
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('games-updated');
+                }
+                
+                return { 
+                    success: true, 
+                    uninstallerUsed: false,
+                    message: 'No uninstaller found. Removed from library only.'
+                };
+            }
+        } else {
+            // Steam game or no install directory, just remove from library
+            const filtered = customGames.filter(g => g.id !== gameId);
+            store.set('customGames', filtered);
+            
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('games-updated');
+            }
+            
+            return { success: true, uninstallerUsed: false };
+        }
     });
 
     ipcMain.handle('get-api-key', () => {
@@ -126,6 +276,16 @@ app.on('ready', async () => {
 
     ipcMain.handle('set-install-folder', async (event, folder) => {
         store.set('installFolder', folder);
+        // Auto-scan after setting install folder
+        if (folder && fs.existsSync(folder)) {
+            setTimeout(async () => {
+                console.log('[AutoScan] Auto-scanning after install folder change...');
+                const result = await scanInstallFolderForGames();
+                if (result.success && result.gamesFound > 0) {
+                    console.log(`[AutoScan] Found and added ${result.gamesFound} new games`);
+                }
+            }, 1000);
+        }
     });
 
     ipcMain.handle('get-install-folder', async () => {
@@ -774,47 +934,326 @@ app.on('ready', async () => {
         return false;
     });
 
+    /**
+     * Find executable files in a directory (recursively)
+     */
+    function findExecutables(dirPath, maxDepth = 5, currentDepth = 0) {
+        const executables = [];
+        if (currentDepth >= maxDepth) return executables;
+
+        try {
+            if (!fs.existsSync(dirPath)) return executables;
+
+            const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+            
+            for (const entry of entries) {
+                const fullPath = path.join(dirPath, entry.name);
+                
+                if (entry.isFile()) {
+                    const ext = path.extname(entry.name).toLowerCase();
+                    // Common game executable extensions
+                    if (['.exe', '.bat', '.cmd'].includes(ext)) {
+                        const nameLower = entry.name.toLowerCase();
+                        // More lenient filtering - only skip obvious installers/utilities
+                        // Allow "launcher" if it's in the root or game folder (might be the main exe)
+                        const isInRootOrGameFolder = currentDepth <= 1;
+                        const isObviousInstaller = nameLower.includes('setup') || 
+                                                   nameLower.includes('installer') ||
+                                                   nameLower.includes('uninstall') ||
+                                                   (nameLower.includes('redist') && !isInRootOrGameFolder);
+                        
+                        // Only skip launcher if it's clearly not the main game (e.g., in a launcher subfolder)
+                        const isLauncherInSubfolder = nameLower.includes('launcher') && currentDepth > 1;
+                        
+                        if (!isObviousInstaller && !isLauncherInSubfolder) {
+                            executables.push(fullPath);
+                        }
+                    }
+                } else if (entry.isDirectory()) {
+                    // Skip common non-game directories, but be more lenient
+                    const nameLower = entry.name.toLowerCase();
+                    const shouldSkip = nameLower.includes('redist') || 
+                                      nameLower.includes('_redist') ||
+                                      nameLower.includes('directx') ||
+                                      nameLower.includes('vcredist') ||
+                                      nameLower.includes('dotnet') ||
+                                      (nameLower.includes('temp') && currentDepth > 0) ||
+                                      (nameLower.includes('tmp') && currentDepth > 0) ||
+                                      nameLower === 'logs' ||
+                                      nameLower === 'cache';
+                    
+                    if (!shouldSkip) {
+                        executables.push(...findExecutables(fullPath, maxDepth, currentDepth + 1));
+                    }
+                }
+            }
+        } catch (error) {
+            console.error(`[FindExecutables] Error scanning ${dirPath}:`, error);
+        }
+
+        return executables;
+    }
+
+    /**
+     * Wait for a process to finish
+     */
+    async function waitForProcessToFinish(processName, timeout = 3600000) { // 1 hour timeout
+        return new Promise((resolve, reject) => {
+            const startTime = Date.now();
+            
+            const checkProcess = () => {
+                exec(`tasklist /FI "IMAGENAME eq ${processName}" /FO CSV /NH`, (error, stdout) => {
+                    if (error) {
+                        // Process not found, it has finished
+                        console.log(`[ProcessMonitor] ${processName} has finished`);
+                        resolve(true);
+                        return;
+                    }
+
+                    const isRunning = stdout.toLowerCase().includes(processName.toLowerCase());
+                    
+                    if (!isRunning) {
+                        console.log(`[ProcessMonitor] ${processName} has finished`);
+                        resolve(true);
+                        return;
+                    }
+
+                    // Check timeout
+                    if (Date.now() - startTime > timeout) {
+                        console.warn(`[ProcessMonitor] Timeout waiting for ${processName} to finish`);
+                        reject(new Error(`Timeout waiting for ${processName} to finish`));
+                        return;
+                    }
+
+                    // Check again in 2 seconds
+                    setTimeout(checkProcess, 2000);
+                });
+            };
+
+            // Start checking
+            checkProcess();
+        });
+    }
+
     // Installer handler
     ipcMain.handle('run-installer', async (event, folderPath) => {
         try {
-            const fs = await import('fs');
-            const { exec } = await import('child_process');
-            const { promisify } = await import('util');
-            const execAsync = promisify(exec);
-
             // Look for setup.exe or similar installer files
             const installerNames = ['setup.exe', 'install.exe', 'installer.exe', 'Setup.exe', 'Install.exe'];
 
+            let installerPath = null;
+
             for (const installerName of installerNames) {
-                const installerPath = path.join(folderPath, installerName);
-                if (fs.existsSync(installerPath)) {
+                const testPath = path.join(folderPath, installerName);
+                if (fs.existsSync(testPath)) {
+                    installerPath = testPath;
                     console.log('[Installer] Found installer:', installerPath);
-                    // Launch the installer
-                    await shell.openPath(installerPath);
-                    return { success: true, path: installerPath };
+                    break;
                 }
             }
 
             // If no installer found in root, search subdirectories
-            const files = fs.readdirSync(folderPath, { withFileTypes: true });
-            for (const file of files) {
-                if (file.isDirectory()) {
-                    const subPath = path.join(folderPath, file.name);
-                    for (const installerName of installerNames) {
-                        const installerPath = path.join(subPath, installerName);
-                        if (fs.existsSync(installerPath)) {
-                            console.log('[Installer] Found installer in subdirectory:', installerPath);
-                            await shell.openPath(installerPath);
-                            return { success: true, path: installerPath };
+            if (!installerPath) {
+                const files = fs.readdirSync(folderPath, { withFileTypes: true });
+                for (const file of files) {
+                    if (file.isDirectory()) {
+                        const subPath = path.join(folderPath, file.name);
+                        for (const installerName of installerNames) {
+                            const testPath = path.join(subPath, installerName);
+                            if (fs.existsSync(testPath)) {
+                                installerPath = testPath;
+                                console.log('[Installer] Found installer in subdirectory:', installerPath);
+                                break;
+                            }
                         }
+                        if (installerPath) break;
                     }
                 }
             }
 
-            return { success: false, error: 'No installer found' };
+            if (!installerPath) {
+                return { success: false, error: 'No installer found' };
+            }
+
+            // Launch the installer
+            console.log('[Installer] Launching installer:', installerPath);
+            await shell.openPath(installerPath);
+
+            // Get the installer process name
+            const installerProcessName = path.basename(installerPath);
+
+            // Wait for installer to finish
+            console.log('[Installer] Waiting for installer to finish...');
+            try {
+                await waitForProcessToFinish(installerProcessName);
+                console.log('[Installer] Installer finished successfully');
+                return { success: true, path: installerPath, finished: true };
+            } catch (error) {
+                console.error('[Installer] Error waiting for installer:', error);
+                return { success: true, path: installerPath, finished: false, error: error.message };
+            }
         } catch (error) {
             console.error('[Installer] Error:', error);
             return { success: false, error: error.message };
+        }
+    });
+
+    // Find executables in game folder
+    ipcMain.handle('find-game-executables', async (event, gameFolderPath) => {
+        try {
+            console.log('[FindExecutables] Scanning folder:', gameFolderPath);
+            const executables = findExecutables(gameFolderPath);
+            console.log('[FindExecutables] Found executables:', executables);
+            
+            // Return the first executable found (or all if needed)
+            return { success: true, executables, primaryExecutable: executables.length > 0 ? executables[0] : null };
+        } catch (error) {
+            console.error('[FindExecutables] Error:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    // Auto-scan install folder for games
+    async function scanInstallFolderForGames() {
+        const installFolder = store.get('installFolder');
+        if (!installFolder || !fs.existsSync(installFolder)) {
+            console.log('[AutoScan] Install folder not set or does not exist');
+            return { success: false, error: 'Install folder not set or does not exist', gamesFound: 0 };
+        }
+
+        console.log('[AutoScan] Scanning install folder for games:', installFolder);
+        const customGames = store.get('customGames') || [];
+        const existingGameNames = new Set(customGames.map(g => g.name.toLowerCase()));
+        const existingGamePaths = new Set(customGames.map(g => g.installDir?.toLowerCase()));
+        
+        let gamesFound = 0;
+        const newGames = [];
+
+        try {
+            const entries = fs.readdirSync(installFolder, { withFileTypes: true });
+            
+            for (const entry of entries) {
+                if (!entry.isDirectory()) continue;
+                
+                const gameFolderPath = path.join(installFolder, entry.name);
+                const gameName = entry.name;
+                
+                // Skip if game already exists
+                if (existingGameNames.has(gameName.toLowerCase()) || 
+                    existingGamePaths.has(gameFolderPath.toLowerCase())) {
+                    console.log(`[AutoScan] Skipping existing game: ${gameName}`);
+                    continue;
+                }
+
+                // Find executables in this folder (increased depth to 5)
+                const executables = findExecutables(gameFolderPath, 5, 0);
+                
+                if (executables.length > 0) {
+                    // Prefer executables in root or first level, otherwise use first found
+                    const rootExecutables = executables.filter(exe => {
+                        const relativePath = path.relative(gameFolderPath, exe);
+                        return !relativePath.includes(path.sep) || relativePath.split(path.sep).length === 1;
+                    });
+                    
+                    const primaryExecutablePath = rootExecutables.length > 0 ? rootExecutables[0] : executables[0];
+                    const primaryExecutable = path.basename(primaryExecutablePath);
+                    
+                    const newGame = {
+                        name: gameName,
+                        installDir: gameFolderPath,
+                        executable: primaryExecutable,
+                        platform: 'custom',
+                        id: `custom-${Date.now()}-${gamesFound}`,
+                        addedAt: Date.now()
+                    };
+                    
+                    newGames.push(newGame);
+                    gamesFound++;
+                    console.log(`[AutoScan] Found game: ${gameName} (${primaryExecutable})`);
+                    console.log(`[AutoScan]   Full path: ${primaryExecutablePath}`);
+                    console.log(`[AutoScan]   Total executables found: ${executables.length}`);
+                } else {
+                    console.log(`[AutoScan] No executables found in: ${gameName}`);
+                    console.log(`[AutoScan]   Searched path: ${gameFolderPath}`);
+                }
+            }
+
+            // Add all new games to the store
+            if (newGames.length > 0) {
+                const updatedGames = [...customGames, ...newGames];
+                store.set('customGames', updatedGames);
+                console.log(`[AutoScan] Added ${newGames.length} new games to library`);
+                
+                // Notify frontend to refresh
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('games-updated');
+                }
+            }
+
+            return { success: true, gamesFound: newGames.length, games: newGames };
+        } catch (error) {
+            console.error('[AutoScan] Error scanning install folder:', error);
+            return { success: false, error: error.message, gamesFound: 0 };
+        }
+    }
+
+    // IPC handler for manual scan
+    ipcMain.handle('scan-install-folder', async () => {
+        return await scanInstallFolderForGames();
+    });
+
+    // Diagnostic function to check a specific folder
+    ipcMain.handle('diagnose-game-folder', async (event, folderPath) => {
+        try {
+            if (!fs.existsSync(folderPath)) {
+                return { success: false, error: 'Folder does not exist', folderPath };
+            }
+
+            const diagnostics = {
+                folderPath,
+                exists: true,
+                isDirectory: fs.statSync(folderPath).isDirectory(),
+                entries: [],
+                executables: [],
+                allFiles: []
+            };
+
+            const entries = fs.readdirSync(folderPath, { withFileTypes: true });
+            for (const entry of entries) {
+                const fullPath = path.join(folderPath, entry.name);
+                const info = {
+                    name: entry.name,
+                    path: fullPath,
+                    isDirectory: entry.isDirectory(),
+                    isFile: entry.isFile()
+                };
+
+                if (entry.isFile()) {
+                    const ext = path.extname(entry.name).toLowerCase();
+                    if (['.exe', '.bat', '.cmd'].includes(ext)) {
+                        diagnostics.executables.push({
+                            name: entry.name,
+                            path: fullPath,
+                            size: fs.statSync(fullPath).size
+                        });
+                    }
+                    diagnostics.allFiles.push(entry.name);
+                }
+
+                diagnostics.entries.push(info);
+            }
+
+            // Also search recursively
+            const foundExecutables = findExecutables(folderPath, 5, 0);
+            diagnostics.executablesFound = foundExecutables.map(exe => ({
+                name: path.basename(exe),
+                path: exe,
+                relativePath: path.relative(folderPath, exe)
+            }));
+
+            return { success: true, diagnostics };
+        } catch (error) {
+            return { success: false, error: error.message, folderPath };
         }
     });
 
@@ -900,6 +1339,18 @@ app.on('ready', async () => {
             console.error('TEST: Error during background test:', error);
         }
     }, 1000);
+
+    // Auto-scan install folder for games on startup
+    setTimeout(async () => {
+        const installFolder = store.get('installFolder');
+        if (installFolder && fs.existsSync(installFolder)) {
+            console.log('[AutoScan] Auto-scanning install folder on startup...');
+            const result = await scanInstallFolderForGames();
+            if (result.success && result.gamesFound > 0) {
+                console.log(`[AutoScan] Found and added ${result.gamesFound} new games`);
+            }
+        }
+    }, 3000); // Wait 3 seconds after app initialization
 });
 
 // Quit when all windows are closed, except on macOS.

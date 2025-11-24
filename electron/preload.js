@@ -41,8 +41,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     addCustomGame: (game) => ipcRenderer.invoke('add-custom-game', game),
     removeCustomGame: (gameId) => ipcRenderer.invoke('remove-custom-game', gameId),
     runInstaller: (folderPath) => ipcRenderer.invoke('run-installer', folderPath),
+    findGameExecutables: (gameFolderPath) => ipcRenderer.invoke('find-game-executables', gameFolderPath),
+    scanInstallFolder: () => ipcRenderer.invoke('scan-install-folder'),
+    diagnoseGameFolder: (folderPath) => ipcRenderer.invoke('diagnose-game-folder', folderPath),
     extractArchive: (filePath, outputDir) => ipcRenderer.invoke('extract-archive', { filePath, outputDir }),
     onExtractionProgress: (callback) => ipcRenderer.on('extraction-progress', (event, data) => callback(data)),
+    onGamesUpdated: (callback) => ipcRenderer.on('games-updated', callback),
     // Real-Debrid
     rdAddMagnet: (magnetLink, apiKey) => ipcRenderer.invoke('rd-add-magnet', { magnetLink, apiKey }),
     rdGetTorrentInfo: (torrentId, apiKey) => ipcRenderer.invoke('rd-get-torrent-info', { torrentId, apiKey }),

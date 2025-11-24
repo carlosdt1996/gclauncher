@@ -37,6 +37,14 @@ function App() {
   const [theme, setTheme] = useState('pc'); // 'pc' or 'tv'
   const themeRef = useRef('pc');
   const [isFullscreen, setIsFullscreen] = useState(false);
+  
+  // Toast notifications
+  const [toasts, setToasts] = useState([]);
+  const toastIdCounter = useRef(0);
+  
+  // Confirmation modal
+  const [confirmationModal, setConfirmationModal] = useState(null);
+  const confirmationResolveRef = useRef(null);
 
   useEffect(() => {
     themeRef.current = theme;
@@ -139,6 +147,39 @@ function App() {
 
   const handledDownloads = useRef(new Set());
 
+  // Toast notification functions
+  const showToast = useCallback((message, type = 'info', duration = 5000) => {
+    const id = toastIdCounter.current++;
+    const toast = { id, message, type, duration };
+    setToasts(prev => [...prev, toast]);
+    
+    // Auto-remove after duration
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, duration);
+    
+    return id;
+  }, []);
+
+  const removeToast = useCallback((id) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  }, []);
+
+  // Confirmation modal function (replaces confirm())
+  const showConfirmation = useCallback((message, title = 'Confirm') => {
+    return new Promise((resolve) => {
+      setConfirmationModal({ message, title });
+      confirmationResolveRef.current = resolve;
+    });
+  }, []);
+
+  const handleConfirmation = useCallback((result) => {
+    if (confirmationResolveRef.current) {
+      confirmationResolveRef.current(result);
+      confirmationResolveRef.current = null;
+    }
+    setConfirmationModal(null);
+  }, []);
 
   useEffect(() => {
     const init = async () => {
@@ -165,6 +206,25 @@ function App() {
           const iFolder = await window.electronAPI.getInstallFolder();
           setInstallFolder(iFolder || '');
           setTempInstallFolder(iFolder || '');
+
+          // Listen for games updated event
+          if (window.electronAPI.onGamesUpdated) {
+            window.electronAPI.onGamesUpdated(async () => {
+              console.log('[Frontend] Games updated, refreshing...');
+              const updatedGames = await window.electronAPI.getGames();
+              setGames(updatedGames);
+              
+              // Refresh images for new games
+              if (key) {
+                updatedGames.forEach(async (game) => {
+                  const img = await window.electronAPI.getGameImage(game.id, game.name);
+                  if (img) {
+                    setImages(prev => ({ ...prev, [game.id]: img }));
+                  }
+                });
+              }
+            });
+          }
 
           // Load VirusTotal API key
           const vtKey = await window.electronAPI.getVirustotalApiKey();
@@ -345,12 +405,13 @@ function App() {
       const result = await window.electronAPI.backloggdLogin();
       if (result.success) {
         setBackloggdUser(result.username);
+        showToast('Login successful!', 'success');
       } else {
-        alert('Login failed or cancelled');
+        showToast('Login failed or cancelled', 'error');
       }
     } catch (error) {
       console.error('Login error:', error);
-      alert('Login error');
+      showToast('Login error', 'error');
     }
   };
 
@@ -380,7 +441,7 @@ function App() {
         await window.electronAPI.launchGame(selectedGame);
       } catch (error) {
         console.error('Error launching game:', error);
-        alert('Failed to launch game: ' + error.message);
+        showToast('Failed to launch game: ' + error.message, 'error');
       }
     }
   };
@@ -388,12 +449,17 @@ function App() {
   const handleUninstallGame = async () => {
     if (!selectedGame) return;
 
-    const confirmMessage = `Are you sure you want to uninstall "${selectedGame.name}"?\n\nThis will remove the game from your library. The game files will remain on your disk.`;
+    const confirmMessage = selectedGame.platform === 'custom' && selectedGame.installDir
+      ? `Are you sure you want to uninstall "${selectedGame.name}"?\n\nThis will:\n1. Look for and run the game's uninstaller\n2. Wait for uninstallation to complete\n3. Check if the game folder was removed\n4. Remove the game from your library`
+      : `Are you sure you want to remove "${selectedGame.name}" from your library?\n\nThis will only remove it from your library. Game files will remain on your disk.`;
 
-    if (confirm(confirmMessage)) {
+    const confirmed = await showConfirmation(confirmMessage, 'Uninstall Game');
+    if (confirmed) {
       try {
         if (window.electronAPI && window.electronAPI.removeCustomGame) {
-          await window.electronAPI.removeCustomGame(selectedGame.id);
+          showToast('Uninstalling game...', 'info');
+          
+          const result = await window.electronAPI.removeCustomGame(selectedGame.id);
 
           // Refresh the games list
           const updatedGames = await window.electronAPI.getGames();
@@ -402,20 +468,32 @@ function App() {
           // Close the modal
           handleCloseGameDetails();
 
-          alert(`"${selectedGame.name}" has been removed from your library.`);
+          if (result.success) {
+            if (result.uninstallerUsed) {
+              if (result.folderRemoved) {
+                showToast(`"${selectedGame.name}" has been uninstalled and removed from your library.`, 'success');
+              } else {
+                showToast(`Uninstaller finished, but game folder still exists. Removed from library.`, 'warning');
+              }
+            } else {
+              showToast(`"${selectedGame.name}" has been removed from your library.`, 'success');
+            }
+          } else {
+            showToast(result.error || 'Uninstall completed with warnings.', 'warning');
+          }
         } else {
-          alert('Uninstall feature is not available.');
+          showToast('Uninstall feature is not available.', 'error');
         }
       } catch (error) {
         console.error('Error uninstalling game:', error);
-        alert('Failed to uninstall game: ' + error.message);
+        showToast('Failed to uninstall game: ' + error.message, 'error');
       }
     }
   };
 
   const handleOpenCoverArtSelector = useCallback(async () => {
     if (!selectedGame || !apiKey) {
-      alert('SteamGridDB API key is required to change cover art.');
+      showToast('SteamGridDB API key is required to change cover art.', 'warning');
       return;
     }
 
@@ -432,12 +510,12 @@ function App() {
         setAvailableCovers(result.data);
       } else {
         setAvailableCovers([]);
-        alert(result.error || 'No alternative covers found for this game.');
+        showToast(result.error || 'No alternative covers found for this game.', 'warning');
       }
     } catch (error) {
       console.error('Error fetching covers:', error);
       setAvailableCovers([]);
-      alert('Error fetching covers: ' + error.message);
+      showToast('Error fetching covers: ' + error.message, 'error');
     }
 
     setCoversLoading(false);
@@ -540,11 +618,11 @@ function App() {
         const allDownloads = await window.electronAPI.getAllDownloads();
         setDownloads(allDownloads);
       } else {
-        alert('Magnet link not found for this game');
+        showToast('Magnet link not found for this game', 'error');
       }
     } catch (error) {
       console.error('Error starting download:', error);
-      alert('Failed to start download: ' + error.message);
+      showToast('Failed to start download: ' + error.message, 'error');
     }
   };
 
@@ -560,7 +638,7 @@ function App() {
       setFitgirlGameDetails(details);
     } catch (error) {
       console.error('Error fetching game details:', error);
-      alert('Failed to load game details: ' + error.message);
+      showToast('Failed to load game details: ' + error.message, 'error');
     }
   };
 
@@ -579,7 +657,7 @@ function App() {
         setDownloads(allDownloads);
       } catch (error) {
         console.error('[Frontend] WebTorrent download error:', error);
-        alert('Failed to start download: ' + error.message);
+        showToast('Failed to start download: ' + error.message, 'error');
       }
       return;
     }
@@ -641,7 +719,11 @@ function App() {
           if (scanResult.success && scanResult.status === 'malicious') {
             const stats = scanResult.stats;
             const maliciousCount = stats ? stats.malicious : 'unknown';
-            if (!confirm(`⚠️ WARNING: VirusTotal flagged this torrent as malicious!\n\nDetections: ${maliciousCount}\nLink: ${scanResult.permalink}\n\nDo you want to continue downloading?`)) {
+            const confirmed = await showConfirmation(
+              `⚠️ WARNING: VirusTotal flagged this torrent as malicious!\n\nDetections: ${maliciousCount}\nLink: ${scanResult.permalink}\n\nDo you want to continue downloading?`,
+              'Security Warning'
+            );
+            if (!confirmed) {
               throw new Error('Download cancelled: Malicious torrent detected');
             }
           }
@@ -849,21 +931,61 @@ function App() {
         // For now, we'll skip auto-scan of folder as it might be huge.
         // We can try to find the installer and scan that.
 
-        shouldInstall = confirm(`Download and extraction complete: ${gameName}\n\nDo you want to install this game now?`);
+        shouldInstall = await showConfirmation(`Download and extraction complete: ${gameName}\n\nDo you want to install this game now?`, 'Install Game');
 
         if (shouldInstall) {
           // 1. Launch Installer
           const installResult = await window.electronAPI.runInstaller(extractedPath);
 
           if (!installResult.success) {
-            alert('Could not find setup.exe automatically. Please check the download folder.');
+            showToast('Could not find setup.exe automatically. Please check the download folder.', 'warning');
+            return;
           }
 
-          // 2. Add to Library
+          // 2. Wait for installer to finish (if it's still running)
+          if (!installResult.finished) {
+            console.log('[Frontend] Waiting for installer to finish...');
+            // The backend already waits, but we check the result
+            if (installResult.error) {
+              console.warn('[Frontend] Installer may still be running:', installResult.error);
+            }
+          }
+
+          // 3. Wait a bit for files to be written after installer finishes
+          console.log('[Frontend] Waiting 3 seconds for installation to complete...');
+          await new Promise(resolve => setTimeout(resolve, 3000));
+
+          // 4. Find game executables in the designated install folder
+          // Use installFolder from settings, or fall back to extractedPath if not set
+          const installPath = installFolder || extractedPath;
+          console.log('[Frontend] Scanning for executables in designated game folder:', installPath);
+          
+          if (!installFolder) {
+            console.warn('[Frontend] No install folder set in settings, using extracted path. Consider setting an install folder in settings.');
+          }
+          
+          const executableResult = await window.electronAPI.findGameExecutables(installPath);
+          
+          let gameExecutable = '';
+          if (executableResult.success && executableResult.primaryExecutable) {
+            // Extract just the filename from the full path
+            const lastSeparator = Math.max(
+              executableResult.primaryExecutable.lastIndexOf('\\'),
+              executableResult.primaryExecutable.lastIndexOf('/')
+            );
+            gameExecutable = lastSeparator !== -1 
+              ? executableResult.primaryExecutable.substring(lastSeparator + 1)
+              : executableResult.primaryExecutable;
+            console.log('[Frontend] Found game executable:', gameExecutable);
+          } else {
+            console.warn('[Frontend] No executable found in game folder, user will need to set it manually');
+          }
+
+          // 5. Add to Library (only after setup.exe finishes and executable is found)
           await window.electronAPI.addCustomGame({
             name: gameName,
-            installPath: installFolder || '',
-            executable: '', // Will be set by user or auto-detected later
+            installPath: installPath,
+            executable: gameExecutable,
             addedAt: Date.now()
           });
 
@@ -879,7 +1001,7 @@ function App() {
             }
           }
 
-          alert(`${gameName} has been added to your library!`);
+          showToast(`${gameName} has been added to your library!${gameExecutable ? `\n\nExecutable found: ${gameExecutable}` : '\n\nNote: No executable was auto-detected. You may need to set it manually in game settings.'}`, 'success');
         }
       } else {
         console.error('[Frontend] Extraction failed:', extractResult.error);
@@ -888,7 +1010,7 @@ function App() {
             ? { ...d, status: 'error', error: extractResult.error }
             : d
         ));
-        alert('Extraction failed: ' + extractResult.error);
+        showToast('Extraction failed: ' + extractResult.error, 'error');
       }
     } catch (error) {
       console.error('[Frontend] Error downloading game:', error);
@@ -896,14 +1018,14 @@ function App() {
       setRdDownloads(prev => prev.filter(d => d.id !== downloadId)); // Use ID to be safe
 
       if (error.message !== 'Download cancelled by user') {
-        alert('Failed to start download: ' + error.message);
+        showToast('Failed to start download: ' + error.message, 'error');
       }
     }
   };
 
   const handleDownloadFitgirlGame = async () => {
     if (!fitgirlGameDetails || !fitgirlGameDetails.magnetLink) {
-      alert('Magnet link not found for this game');
+      showToast('Magnet link not found for this game', 'error');
       return;
     }
     setShowFitgirlDetails(false);
@@ -942,16 +1064,16 @@ function App() {
         setSelectedSearchGame(null);
         console.error('[Search] Failed:', result.error);
         if (result.error === 'SteamGridDB API key not set') {
-          alert('Please set your SteamGridDB API Key in Settings to use the search.');
+          showToast('Please set your SteamGridDB API Key in Settings to use the search.', 'warning');
           setShowSettings(true);
         } else {
-          alert(`Search failed: ${result.error}`);
+          showToast(`Search failed: ${result.error}`, 'error');
         }
       }
     } catch (error) {
       console.error('[Search] Error:', error);
       setSearchResults([]);
-      alert('An error occurred while searching.');
+      showToast('An error occurred while searching.', 'error');
     }
     setSearchLoading(false);
   };
@@ -1006,7 +1128,7 @@ function App() {
     }
 
     if (!torrent.magnetLink) {
-      alert('No magnet link available for this torrent');
+      showToast('No magnet link available for this torrent', 'error');
       return;
     }
 
@@ -1680,12 +1802,13 @@ function App() {
       if (progress.status === 'completed' && !handledDownloads.current.has(progress.infoHash)) {
         handledDownloads.current.add(progress.infoHash);
 
-        if (confirm(`Download complete: ${progress.gameName}\n\nDo you want to install this game now?`)) {
+        const shouldInstall = await showConfirmation(`Download complete: ${progress.gameName}\n\nDo you want to install this game now?`, 'Install Game');
+        if (shouldInstall) {
           // 1. Launch Installer
           const installResult = await window.electronAPI.runInstaller(progress.savePath);
 
           if (!installResult.success) {
-            alert('Could not find setup.exe automatically. Please check the download folder.');
+            showToast('Could not find setup.exe automatically. Please check the download folder.', 'warning');
             // await window.electronAPI.openPath(progress.savePath); // Optional: open folder
           }
 
@@ -1708,7 +1831,7 @@ function App() {
             setImages(prev => ({ ...prev, [updatedGames.find(g => g.name === progress.gameName)?.id]: img }));
           }
 
-          alert(`${progress.gameName} has been added to your library!`);
+          showToast(`${progress.gameName} has been added to your library!`, 'success');
         }
       }
     };
@@ -1802,7 +1925,7 @@ function App() {
                 console.log('Toggling fullscreen...');
                 if (!window.electronAPI?.toggleFullscreen) {
                   console.error('toggleFullscreen API not available');
-                  alert('Fullscreen API not available. Please restart the app.');
+                  showToast('Fullscreen API not available. Please restart the app.', 'error');
                   return;
                 }
                 const newFullscreenState = await window.electronAPI.toggleFullscreen();
@@ -1810,7 +1933,7 @@ function App() {
                 setIsFullscreen(newFullscreenState);
               } catch (error) {
                 console.error('Error toggling fullscreen:', error);
-                alert('Error toggling fullscreen: ' + error.message);
+                showToast('Error toggling fullscreen: ' + error.message, 'error');
               }
             }}
             title={isFullscreen ? 'Exit Fullscreen' : 'Enter Fullscreen'}
@@ -2428,6 +2551,82 @@ function App() {
                     placeholder="C:\Games"
                   />
                   <p className="setting-help">Where games will be installed (optional)</p>
+                  <button 
+                    className="btn-secondary" 
+                    onClick={async () => {
+                      try {
+                        showToast('Scanning install folder for games...', 'info');
+                        const result = await window.electronAPI.scanInstallFolder();
+                        if (result.success) {
+                          if (result.gamesFound > 0) {
+                            showToast(`Found and added ${result.gamesFound} new game(s)!`, 'success');
+                            // Refresh games list
+                            const updatedGames = await window.electronAPI.getGames();
+                            setGames(updatedGames);
+                            
+                            // Refresh images for new games
+                            if (apiKey) {
+                              updatedGames.forEach(async (game) => {
+                                const img = await window.electronAPI.getGameImage(game.id, game.name);
+                                if (img) {
+                                  setImages(prev => ({ ...prev, [game.id]: img }));
+                                }
+                              });
+                            }
+                          } else {
+                            showToast('No new games found in install folder.', 'info');
+                          }
+                        } else {
+                          showToast(`Scan failed: ${result.error}`, 'error');
+                        }
+                      } catch (error) {
+                        console.error('Error scanning install folder:', error);
+                        showToast('Error scanning install folder: ' + error.message, 'error');
+                      }
+                    }}
+                    style={{ marginTop: '10px' }}
+                  >
+                    🔍 Scan for Games
+                  </button>
+                  <p className="setting-help" style={{ fontSize: '0.85rem', marginTop: '5px' }}>
+                    Automatically scans subdirectories in the install folder and adds games with executables to your library
+                  </p>
+                  <button 
+                    className="btn-secondary" 
+                    onClick={async () => {
+                      if (!tempInstallFolder || !tempInstallFolder.trim()) {
+                        showToast('Please set an install folder first', 'warning');
+                        return;
+                      }
+                      const folderPath = prompt('Enter the full path to the game folder to diagnose (e.g., C:\\Games\\Inazuma Eleven):', tempInstallFolder + '\\Inazuma Eleven');
+                      if (!folderPath) return;
+                      
+                      try {
+                        showToast('Diagnosing folder...', 'info');
+                        const result = await window.electronAPI.diagnoseGameFolder(folderPath);
+                        if (result.success) {
+                          const diag = result.diagnostics;
+                          const message = `Folder: ${diag.folderPath}\n` +
+                            `Exists: ${diag.exists}\n` +
+                            `Is Directory: ${diag.isDirectory}\n` +
+                            `Direct Executables: ${diag.executables.length}\n` +
+                            `All Executables Found: ${diag.executablesFound.length}\n\n` +
+                            `Direct EXEs:\n${diag.executables.map(e => `  - ${e.name}`).join('\n') || '  (none)'}\n\n` +
+                            `All Found EXEs:\n${diag.executablesFound.map(e => `  - ${e.relativePath || e.name}`).join('\n') || '  (none)'}`;
+                          console.log('[Diagnostic]', diag);
+                          alert(message);
+                        } else {
+                          showToast(`Diagnostic failed: ${result.error}`, 'error');
+                        }
+                      } catch (error) {
+                        console.error('Error diagnosing folder:', error);
+                        showToast('Error diagnosing folder: ' + error.message, 'error');
+                      }
+                    }}
+                    style={{ marginTop: '10px', fontSize: '0.9rem' }}
+                  >
+                    🔬 Diagnose Game Folder
+                  </button>
                 </div>
               </div>
             </div>
@@ -2496,7 +2695,7 @@ function App() {
                   ) : (
                     <p className="placeholder-text">Loading rating...</p>
                   )}
-                  <button className="btn-secondary" style={{ marginTop: '5px', fontSize: '0.9rem' }} onClick={() => alert('Review feature coming soon!')}>
+                  <button className="btn-secondary" style={{ marginTop: '5px', fontSize: '0.9rem' }} onClick={() => showToast('Review feature coming soon!', 'info')}>
                     Write Backloggd Review
                   </button>
                 </div>
@@ -2574,6 +2773,44 @@ function App() {
                 disabled={availableCovers.length === 0}
               >
                 Apply Cover
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast Notifications */}
+      <div className="toast-container">
+        {toasts.map(toast => (
+          <div
+            key={toast.id}
+            className={`toast toast-${toast.type}`}
+            onClick={() => removeToast(toast.id)}
+          >
+            <div className="toast-content">
+              <span className="toast-message">{toast.message}</span>
+              <button className="toast-close" onClick={(e) => { e.stopPropagation(); removeToast(toast.id); }}>×</button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Confirmation Modal */}
+      {confirmationModal && (
+        <div className="modal-overlay" onClick={() => handleConfirmation(false)}>
+          <div className="modal confirmation-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>{confirmationModal.title}</h2>
+            </div>
+            <div className="modal-body">
+              <p style={{ whiteSpace: 'pre-line' }}>{confirmationModal.message}</p>
+            </div>
+            <div className="modal-footer">
+              <button className="btn-secondary" onClick={() => handleConfirmation(false)}>
+                Cancel
+              </button>
+              <button className="btn-primary" onClick={() => handleConfirmation(true)}>
+                Confirm
               </button>
             </div>
           </div>
