@@ -14,9 +14,10 @@ import torrentManager from './utils/torrent-manager.js';
 import { getFileReport, calculateFileHash } from './utils/virustotal.js';
 import * as realDebrid from './utils/real-debrid.js';
 import * as torrentSearch from './utils/torrent-search.js';
-import { extractArchive, isArchive } from './utils/extractor.js';
+import { extractArchive, isArchive, findMainArchive } from './utils/extractor.js';
 import processMonitor from './utils/process-monitor.js';
 import os from 'os';
+import fs from 'fs';
 
 const require = createRequire(import.meta.url);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -375,8 +376,21 @@ app.on('ready', async () => {
 
     ipcMain.handle('rd-download-file', async (event, { url, filename, downloadPath }) => {
         try {
+            // Use provided path or default to Downloads/FitGirl Repacks
             const defaultPath = downloadPath || path.join(os.homedir(), 'Downloads', 'FitGirl Repacks');
+
+            console.log('[Main] RD Download - URL:', url);
+            console.log('[Main] RD Download - Filename:', filename);
+            console.log('[Main] RD Download - Download path:', defaultPath);
+
+            // Ensure the directory exists
+            if (!fs.existsSync(defaultPath)) {
+                fs.mkdirSync(defaultPath, { recursive: true });
+                console.log('[Main] Created download directory:', defaultPath);
+            }
+
             const savePath = path.join(defaultPath, filename);
+            console.log('[Main] Full save path:', savePath);
 
             // Use the new startDownload function with downloadId
             const downloadId = filename; // Use filename as unique ID
@@ -391,8 +405,10 @@ app.on('ready', async () => {
                 }
             });
 
+            console.log('[Main] Download complete:', savePath);
             return { success: true, path: savePath };
         } catch (error) {
+            console.error('[Main] Download error:', error);
             return { success: false, error: error.message };
         }
     });
@@ -418,23 +434,99 @@ app.on('ready', async () => {
     // Extraction handler
     ipcMain.handle('extract-archive', async (event, { filePath, outputDir }) => {
         try {
-            if (!isArchive(filePath)) {
+            console.log('[Main] Extraction request received');
+            console.log('[Main] Input path:', filePath);
+            console.log('[Main] Output dir:', outputDir);
+
+            let archivePath = filePath;
+
+            // If it's a directory, find the archive inside
+            const stats = fs.statSync(filePath);
+            console.log('[Main] Path is a:', stats.isDirectory() ? 'directory' : 'file');
+
+            if (stats.isDirectory()) {
+                console.log('[Main] Searching for archive in directory...');
+                const found = findMainArchive(filePath);
+                if (!found) {
+                    console.error('[Main] No archive found in directory');
+                    return { success: false, error: 'No archive found in directory' };
+                }
+                archivePath = found;
+                console.log('[Main] Found archive:', archivePath);
+            } else if (!isArchive(filePath)) {
+                console.error('[Main] File is not an archive:', filePath);
                 return { success: false, error: 'Not an archive' };
+            } else {
+                console.log('[Main] File is a valid archive');
             }
 
-            const finalOutputDir = outputDir || path.dirname(filePath);
+            // Determine output directory
+            let finalOutputDir;
+            if (outputDir) {
+                // Use provided output directory (should be a folder with game name)
+                finalOutputDir = outputDir;
+                // Ensure the directory exists
+                if (!fs.existsSync(finalOutputDir)) {
+                    fs.mkdirSync(finalOutputDir, { recursive: true });
+                    console.log('[Main] Created output directory:', finalOutputDir);
+                }
+            } else {
+                // Fallback: use parent directory of archive, create subfolder with game name
+                const archiveDir = path.dirname(archivePath);
+                const archiveName = path.basename(archivePath, path.extname(archivePath));
+                // Sanitize archive name for folder creation
+                const safeName = archiveName.replace(/[^a-zA-Z0-9\s\-\[\]\(\)]/g, '').trim() || 'extracted';
+                finalOutputDir = path.join(archiveDir, safeName);
+                if (!fs.existsSync(finalOutputDir)) {
+                    fs.mkdirSync(finalOutputDir, { recursive: true });
+                    console.log('[Main] Created output directory:', finalOutputDir);
+                }
+            }
+            
+            console.log('[Main] Final output directory:', finalOutputDir);
+            console.log('[Main] Starting extraction...');
 
-            await extractArchive(filePath, finalOutputDir, (progress) => {
+            // Extract gameName from the output directory name for progress updates
+            const gameName = path.basename(finalOutputDir);
+
+            await extractArchive(archivePath, finalOutputDir, (progress) => {
                 if (mainWindow && !mainWindow.isDestroyed()) {
                     mainWindow.webContents.send('extraction-progress', {
-                        filename: path.basename(filePath),
+                        filename: path.basename(archivePath),
+                        gameName: gameName,
                         ...progress
                     });
                 }
             });
 
+            console.log('[Main] Extraction completed successfully');
+
+            // Check for nested archives in the output directory (e.g. RAR inside ZIP)
+            console.log('[Main] Checking for nested archives...');
+            const nestedArchive = findMainArchive(finalOutputDir);
+
+            if (nestedArchive && nestedArchive !== archivePath) {
+                console.log('[Main] Found nested archive, extracting:', nestedArchive);
+
+                await extractArchive(nestedArchive, finalOutputDir, (progress) => {
+                    if (mainWindow && !mainWindow.isDestroyed()) {
+                        mainWindow.webContents.send('extraction-progress', {
+                            filename: path.basename(nestedArchive),
+                            gameName: gameName,
+                            ...progress
+                        });
+                    }
+                });
+
+                console.log('[Main] Nested extraction completed');
+            } else {
+                console.log('[Main] No nested archives found');
+            }
+
             return { success: true, outputDir: finalOutputDir };
         } catch (error) {
+            console.error('[Main] Extraction error:', error);
+            console.error('[Main] Error stack:', error.stack);
             return { success: false, error: error.message };
         }
     });

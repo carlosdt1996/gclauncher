@@ -51,3 +51,8 @@ debug-*.html
 *.tmp
 *.temp
 .cache
+
+# Large binary files
+*.bin
+test.zip
+setup.exe

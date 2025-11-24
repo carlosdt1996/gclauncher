@@ -251,6 +251,34 @@ function App() {
           setTempApiKey(key);
         }
 
+        // Load Real-Debrid API key
+        const rdKey = await window.electronAPI.getRdApiKey();
+        if (rdKey) {
+          setRdApiKey(rdKey);
+          setTempRdApiKey(rdKey);
+        }
+
+        // Load download folder
+        const dlFolder = await window.electronAPI.getDownloadFolder();
+        if (dlFolder) {
+          setDownloadFolder(dlFolder);
+          setTempDownloadFolder(dlFolder);
+        }
+
+        // Load install folder
+        const instFolder = await window.electronAPI.getInstallFolder();
+        if (instFolder) {
+          setInstallFolder(instFolder);
+          setTempInstallFolder(instFolder);
+        }
+
+        // Load VirusTotal API key
+        const vtKey = await window.electronAPI.getVirustotalApiKey();
+        if (vtKey) {
+          setVirustotalApiKey(vtKey);
+          setTempVirustotalApiKey(vtKey);
+        }
+
         // Load theme preference
         const savedTheme = localStorage.getItem('theme') || 'pc';
         setTheme(savedTheme);
@@ -657,138 +685,175 @@ function App() {
         throw new Error('No download links available after waiting');
       }
 
-      // Step 5: Get unrestricted link
-      updateStatus('Getting download link...', 90);
-      const unrestrictResult = await window.electronAPI.rdGetUnrestrictedLink(torrentInfo.links[0], rdApiKey);
-      if (!unrestrictResult.success) {
-        throw new Error('Failed to get download link');
+      // Step 5: Get all unrestricted links
+      updateStatus('Getting download links...', 90);
+
+      const downloadLinks = [];
+      let totalSize = 0;
+
+      for (const link of torrentInfo.links) {
+        const unrestrictResult = await window.electronAPI.rdGetUnrestrictedLink(link, rdApiKey);
+        if (unrestrictResult.success) {
+          downloadLinks.push(unrestrictResult.data);
+          totalSize += unrestrictResult.data.filesize || 0;
+        }
       }
 
-      // Step 6: Start download
-      updateStatus('Starting download...', 100);
+      if (downloadLinks.length === 0) {
+        throw new Error('Failed to get any download links');
+      }
 
-      // Remove the temporary "preparing" item and let the real download take over
-      // or update it to match the real download structure
+      // Step 6: Start downloads
+      updateStatus('Starting downloads...', 100);
+
+      // Remove the temporary "preparing" item
       setRdDownloads(prev => prev.filter(d => d.id !== downloadId));
 
-      // Add actual download entry
-      const downloadEntry = {
-        filename: unrestrictResult.data.filename,
-        loaded: 0,
-        total: unrestrictResult.data.filesize || 0,
-        percentage: 0,
-        status: 'downloading',
-        gameName: gameName, // Store game name for later
-        image: image // Store image for later
-      };
-      setRdDownloads(prev => [...prev, downloadEntry]);
+      // Create a subfolder for the game to keep files together
+      // Sanitize game name for folder creation
+      const safeGameName = gameName.replace(/[^a-zA-Z0-9\s\-\[\]\(\)]/g, '').trim();
 
-      const downloadResult = await window.electronAPI.rdDownloadFile(
-        unrestrictResult.data.download,
-        unrestrictResult.data.filename,
-        downloadFolder
-      );
+      // Construct the download path
+      // If downloadFolder is not set, pass null to let backend use default
+      let gameDownloadPath = null;
 
-      if (downloadResult.success) {
-        console.log('[Frontend] Download started successfully!');
+      console.log('[Frontend] Download folder value:', JSON.stringify(downloadFolder));
+      console.log('[Frontend] Download folder type:', typeof downloadFolder);
+      console.log('[Frontend] Download folder length:', downloadFolder ? downloadFolder.length : 'N/A');
 
-        let finalPath = downloadResult.path;
+      // Check if downloadFolder is actually set and not empty
+      if (downloadFolder && typeof downloadFolder === 'string' && downloadFolder.trim().length > 0) {
+        const separator = downloadFolder.includes('/') ? '/' : '\\';
+        gameDownloadPath = `${downloadFolder}${downloadFolder.endsWith(separator) ? '' : separator}${safeGameName}`;
+        console.log('[Frontend] Using custom download path:', gameDownloadPath);
+      } else {
+        console.log('[Frontend] Download folder not set, backend will use default');
+      }
 
-        // Check if needs extraction
-        const isArchive = ['.zip', '.rar', '.7z'].some(ext => finalPath.toLowerCase().endsWith(ext));
+      let downloadedFiles = 0;
+      let finalPath = null; // We'll use the folder path for extraction
 
-        if (isArchive) {
-          console.log('[Frontend] Archive detected, starting extraction...');
-          setRdDownloads(prev => prev.map(d =>
-            d.filename === unrestrictResult.data.filename
-              ? { ...d, status: 'extracting', percentage: 0, loaded: 0, total: 100 }
-              : d
-          ));
+      for (let i = 0; i < downloadLinks.length; i++) {
+        const linkData = downloadLinks[i];
 
-          const extractResult = await window.electronAPI.extractArchive(finalPath);
+        // Add actual download entry
+        const fileDownloadId = `${downloadId}-${i}`;
 
-          if (extractResult.success) {
-            finalPath = extractResult.outputDir;
-            setRdDownloads(prev => prev.map(d =>
-              d.filename === unrestrictResult.data.filename
-                ? { ...d, status: 'completed', percentage: 100 }
-                : d
-            ));
-          } else {
-            console.error('[Frontend] Extraction failed:', extractResult.error);
-            alert('Extraction failed: ' + extractResult.error);
-            return; // Stop here if extraction fails
-          }
-        } else {
-          setRdDownloads(prev => prev.map(d =>
-            d.filename === unrestrictResult.data.filename
-              ? { ...d, status: 'completed' }
-              : d
-          ));
+        setRdDownloads(prev => [...prev, {
+          id: fileDownloadId,
+          filename: linkData.filename,
+          loaded: 0,
+          total: linkData.filesize || 0,
+          percentage: 0,
+          status: 'downloading',
+          gameName: gameName,
+          image: image,
+          progressStep: `File ${i + 1}/${downloadLinks.length}`
+        }]);
+
+        const downloadResult = await window.electronAPI.rdDownloadFile(
+          linkData.download,
+          linkData.filename,
+          gameDownloadPath // Will be null if not set, backend will use default
+        );
+
+        if (!downloadResult.success) {
+          throw new Error(`Failed to download file: ${linkData.filename} - ${downloadResult.error}`);
         }
+
+        // Mark this file as completed
+        setRdDownloads(prev => prev.map(d =>
+          d.id === fileDownloadId ? { ...d, status: 'completed', percentage: 100 } : d
+        ));
+
+        downloadedFiles++;
+        // Keep track of the actual download path from the backend
+        if (!finalPath && downloadResult.path) {
+          // Extract the directory path from the file path
+          const lastSeparator = Math.max(
+            downloadResult.path.lastIndexOf('/'),
+            downloadResult.path.lastIndexOf('\\')
+          );
+          finalPath = downloadResult.path.substring(0, lastSeparator);
+        }
+      }
+
+      console.log('[Frontend] All downloads completed!');
+
+      // Extraction Phase
+      // We pass the FOLDER path to extractArchive. The backend will find the main archive.
+
+      console.log('[Frontend] Starting extraction for folder:', finalPath);
+
+      // Create output directory with game name
+      // safeGameName is already declared earlier in this function, reuse it
+      
+      // Get the parent directory of finalPath (where the game folder should be)
+      // Handle both Windows (\) and Unix (/) path separators
+      const lastSeparator = Math.max(
+        finalPath.lastIndexOf('\\'),
+        finalPath.lastIndexOf('/')
+      );
+      const parentDir = lastSeparator !== -1 ? finalPath.substring(0, lastSeparator) : finalPath;
+      
+      // Create output path: parentDir/gameName
+      // Use appropriate separator based on the path
+      const separator = finalPath.includes('\\') ? '\\' : '/';
+      const outputDir = parentDir + separator + safeGameName;
+      
+      console.log('[Frontend] Output directory for extraction:', outputDir);
+
+      // Find the first completed download entry for this game and transition it to extraction
+      // Remove other completed file downloads for the same game to consolidate
+      setRdDownloads(prev => {
+        let foundFirst = false;
+        const updated = prev.map(d => {
+          if (d.gameName === gameName && d.status === 'completed' && !foundFirst) {
+            foundFirst = true;
+            return {
+              ...d,
+              filename: gameName, // Use game name for the consolidated entry
+              status: 'extracting',
+              percentage: 0,
+              loaded: 0,
+              total: 100,
+              progressStep: 'Extracting archive...'
+            };
+          }
+          // Remove other completed file downloads for the same game
+          if (d.gameName === gameName && d.status === 'completed') {
+            return null; // Mark for removal
+          }
+          return d;
+        });
+        // Filter out null entries
+        return updated.filter(d => d !== null);
+      });
+
+      const extractResult = await window.electronAPI.extractArchive(finalPath, outputDir);
+
+      if (extractResult.success) {
+        const extractedPath = extractResult.outputDir;
+
+        // Update the extraction entry to completed
+        setRdDownloads(prev => prev.map(d =>
+          d.gameName === gameName && d.status === 'extracting'
+            ? { ...d, status: 'completed', percentage: 100 }
+            : d
+        ));
 
         // Post-download automation
         let shouldInstall = false;
 
-        // Virus scan integration
-        if (window.electronAPI.getVirustotalApiKey) { // Check if feature exists
-          // Only prompt if key is set or to educate user
-          const hasVtKey = await window.electronAPI.getVirustotalApiKey();
+        // Virus scan integration (Scan the extracted folder? Or the installer?)
+        // For now, we'll skip auto-scan of folder as it might be huge.
+        // We can try to find the installer and scan that.
 
-          if (hasVtKey) {
-            if (confirm(`Download complete: ${gameName}\n\nDo you want to scan this file with VirusTotal before installing?`)) {
-              console.log('[Frontend] Starting VirusTotal scan...');
-              // Update UI to show scanning
-              setRdDownloads(prev => prev.map(d =>
-                d.filename === unrestrictResult.data.filename
-                  ? { ...d, status: 'scanning', percentage: 100 } // scanning state
-                  : d
-              ));
-
-              const scanResult = await window.electronAPI.scanFileVirustotal(finalPath);
-              console.log('[Frontend] Scan result:', scanResult);
-
-              if (scanResult.success) {
-                if (scanResult.status === 'clean') {
-                  if (confirm(`✅ VirusTotal Scan Clean!\n\nHash: ${scanResult.hash}\n\nProceed with installation?`)) {
-                    shouldInstall = true;
-                  }
-                } else if (scanResult.status === 'malicious') {
-                  const stats = scanResult.stats;
-                  const maliciousCount = stats ? stats.malicious : 'unknown';
-                  if (confirm(`⚠️ WARNING: VirusTotal detected potential threats!\n\nDetections: ${maliciousCount}\nLink: ${scanResult.permalink}\n\nDo you still want to install?`)) {
-                    shouldInstall = true;
-                  }
-                } else {
-                  if (confirm(`VirusTotal Report Not Found (New File).\n\nHash: ${scanResult.hash}\n\nProceed with installation?`)) {
-                    shouldInstall = true;
-                  }
-                }
-              } else {
-                alert(`VirusTotal scan failed: ${scanResult.error}\n\nProceeding with installation prompt.`);
-                shouldInstall = confirm(`Download complete: ${gameName}\n\nDo you want to install this game now?`);
-              }
-
-              // Reset status to completed after scan
-              setRdDownloads(prev => prev.map(d =>
-                d.filename === unrestrictResult.data.filename
-                  ? { ...d, status: 'completed', percentage: 100 }
-                  : d
-              ));
-
-            } else {
-              shouldInstall = confirm(`Do you want to install this game now?`);
-            }
-          } else {
-            shouldInstall = confirm(`Download complete: ${gameName}\n\nDo you want to install this game now?`);
-          }
-        } else {
-          shouldInstall = confirm(`Download complete: ${gameName}\n\nDo you want to install this game now?`);
-        }
+        shouldInstall = confirm(`Download and extraction complete: ${gameName}\n\nDo you want to install this game now?`);
 
         if (shouldInstall) {
           // 1. Launch Installer
-          const installResult = await window.electronAPI.runInstaller(finalPath);
+          const installResult = await window.electronAPI.runInstaller(extractedPath);
 
           if (!installResult.success) {
             alert('Could not find setup.exe automatically. Please check the download folder.');
@@ -798,8 +863,8 @@ function App() {
           await window.electronAPI.addCustomGame({
             name: gameName,
             installPath: installFolder || '',
-            executable: '',
-            image: image
+            executable: '', // Will be set by user or auto-detected later
+            addedAt: Date.now()
           });
 
           // Refresh library
@@ -816,9 +881,14 @@ function App() {
 
           alert(`${gameName} has been added to your library!`);
         }
-
       } else {
-        throw new Error(downloadResult.error);
+        console.error('[Frontend] Extraction failed:', extractResult.error);
+        setRdDownloads(prev => prev.map(d =>
+          d.gameName === gameName && d.status === 'extracting'
+            ? { ...d, status: 'error', error: extractResult.error }
+            : d
+        ));
+        alert('Extraction failed: ' + extractResult.error);
       }
     } catch (error) {
       console.error('[Frontend] Error downloading game:', error);
@@ -1647,11 +1717,23 @@ function App() {
 
     // Extraction progress listener
     window.electronAPI.onExtractionProgress((progress) => {
-      setRdDownloads(prev => prev.map(d =>
-        d.filename === progress.filename
-          ? { ...d, status: 'extracting', percentage: progress.percent, loaded: progress.percent, total: 100 }
-          : d
-      ));
+      setRdDownloads(prev => prev.map(d => {
+        // Match by gameName if available, otherwise fall back to filename
+        const matches = progress.gameName
+          ? d.gameName === progress.gameName
+          : d.filename === progress.filename || d.filename === progress.gameName;
+        
+        if (matches && (d.status === 'extracting' || d.status === 'completed')) {
+          return {
+            ...d,
+            status: 'extracting',
+            percentage: progress.percent,
+            loaded: progress.percent,
+            total: 100
+          };
+        }
+        return d;
+      }));
     });
 
   }, []);
