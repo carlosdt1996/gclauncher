@@ -374,13 +374,28 @@ app.on('ready', async () => {
             } else if (game.platform === 'custom') {
                 // For custom games, we should have the executable path
                 if (game.executable) {
-                    const executableName = path.basename(game.executable);
+                    let executablePath = game.executable;
+                    
+                    // If executable is just a filename (not a full path), construct the full path
+                    if (!path.isAbsolute(executablePath) && game.installDir) {
+                        executablePath = path.join(game.installDir, executablePath);
+                        console.log(`[Launch] Constructed full executable path: ${executablePath}`);
+                    }
+                    
+                    // Verify the executable exists
+                    if (!fs.existsSync(executablePath)) {
+                        console.error(`[Launch] Executable not found: ${executablePath}`);
+                        return { success: false, error: `Executable not found: ${executablePath}` };
+                    }
+                    
+                    const executableName = path.basename(executablePath);
                     setGameExecutable(game.id, executableName);
                     processMonitor.registerGame(game.id, game.name, executableName);
                     console.log(`[Launch] Registered custom game ${game.name}: ${executableName}`);
+                    console.log(`[Launch] Launching game with full path: ${executablePath}`);
 
-                    // Launch the game
-                    await shell.openPath(game.executable);
+                    // Launch the game with full path
+                    await shell.openPath(executablePath);
                     return { success: true };
                 }
                 return { success: false, error: 'No executable path for custom game' };
@@ -934,6 +949,19 @@ app.on('ready', async () => {
         return false;
     });
 
+    ipcMain.handle('restore-and-focus-window', async () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            if (mainWindow.isMinimized()) {
+                mainWindow.restore();
+            }
+            mainWindow.show();
+            mainWindow.focus();
+            console.log('[Window] Restored and focused window');
+            return { success: true };
+        }
+        return { success: false };
+    });
+
     /**
      * Find executable files in a directory (recursively)
      */
@@ -1200,6 +1228,157 @@ app.on('ready', async () => {
     // IPC handler for manual scan
     ipcMain.handle('scan-install-folder', async () => {
         return await scanInstallFolderForGames();
+    });
+
+    // Delete downloaded file handler
+    ipcMain.handle('delete-downloaded-file', async (event, filePath) => {
+        try {
+            if (!fs.existsSync(filePath)) {
+                console.log('[DeleteFile] File does not exist:', filePath);
+                return { success: true, message: 'File already deleted or does not exist' };
+            }
+
+            // Check if it's a file (not a directory)
+            const stats = fs.statSync(filePath);
+            if (!stats.isFile()) {
+                console.log('[DeleteFile] Path is not a file:', filePath);
+                return { success: false, error: 'Path is not a file' };
+            }
+
+            // Delete the file
+            fs.unlinkSync(filePath);
+            console.log('[DeleteFile] Successfully deleted:', filePath);
+            return { success: true, message: 'File deleted successfully' };
+        } catch (error) {
+            console.error('[DeleteFile] Error deleting file:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    // Delete downloaded folder handler (recursive)
+    ipcMain.handle('delete-downloaded-folder', async (event, folderPath) => {
+        try {
+            if (!fs.existsSync(folderPath)) {
+                console.log('[DeleteFolder] Folder does not exist:', folderPath);
+                return { success: true, message: 'Folder already deleted or does not exist' };
+            }
+
+            // Check if it's a directory
+            const stats = fs.statSync(folderPath);
+            if (!stats.isDirectory()) {
+                console.log('[DeleteFolder] Path is not a directory:', folderPath);
+                return { success: false, error: 'Path is not a directory' };
+            }
+
+            // Recursively delete the folder and all its contents
+            fs.rmSync(folderPath, { recursive: true, force: true });
+            console.log('[DeleteFolder] Successfully deleted folder:', folderPath);
+            return { success: true, message: 'Folder deleted successfully' };
+        } catch (error) {
+            console.error('[DeleteFolder] Error deleting folder:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    // Scan download folder for extracted installers
+    ipcMain.handle('scan-download-folder-for-installers', async () => {
+        try {
+            const downloadFolder = store.get('downloadFolder') || path.join(os.homedir(), 'Downloads', 'FitGirl Repacks');
+            
+            if (!fs.existsSync(downloadFolder)) {
+                console.log('[ScanInstallers] Download folder does not exist:', downloadFolder);
+                return { success: true, installers: [] };
+            }
+
+            const installers = [];
+            const installerNames = ['setup.exe', 'install.exe', 'installer.exe', 'Setup.exe', 'Install.exe'];
+            
+            // Get all subdirectories in download folder
+            const entries = fs.readdirSync(downloadFolder, { withFileTypes: true });
+            
+            for (const entry of entries) {
+                if (entry.isDirectory()) {
+                    const folderPath = path.join(downloadFolder, entry.name);
+                    
+                    // Check if this folder contains an installer
+                    let hasInstaller = false;
+                    let installerPath = null;
+                    
+                    // Check root of folder
+                    for (const installerName of installerNames) {
+                        const testPath = path.join(folderPath, installerName);
+                        if (fs.existsSync(testPath)) {
+                            hasInstaller = true;
+                            installerPath = folderPath;
+                            break;
+                        }
+                    }
+                    
+                    // If not found in root, check subdirectories (up to 2 levels deep)
+                    if (!hasInstaller) {
+                        try {
+                            const subEntries = fs.readdirSync(folderPath, { withFileTypes: true });
+                            for (const subEntry of subEntries) {
+                                if (subEntry.isDirectory()) {
+                                    const subPath = path.join(folderPath, subEntry.name);
+                                    
+                                    // Check root of subdirectory
+                                    for (const installerName of installerNames) {
+                                        const testPath = path.join(subPath, installerName);
+                                        if (fs.existsSync(testPath)) {
+                                            hasInstaller = true;
+                                            installerPath = subPath; // Use subdirectory where installer was found
+                                            break;
+                                        }
+                                    }
+                                    
+                                    // If still not found, check one more level deep
+                                    if (!hasInstaller) {
+                                        try {
+                                            const subSubEntries = fs.readdirSync(subPath, { withFileTypes: true });
+                                            for (const subSubEntry of subSubEntries) {
+                                                if (subSubEntry.isDirectory()) {
+                                                    const subSubPath = path.join(subPath, subSubEntry.name);
+                                                    for (const installerName of installerNames) {
+                                                        const testPath = path.join(subSubPath, installerName);
+                                                        if (fs.existsSync(testPath)) {
+                                                            hasInstaller = true;
+                                                            installerPath = subSubPath; // Use deepest directory where installer was found
+                                                            break;
+                                                        }
+                                                    }
+                                                    if (hasInstaller) break;
+                                                }
+                                            }
+                                        } catch (error) {
+                                            // Ignore errors in deeper levels
+                                        }
+                                    }
+                                    
+                                    if (hasInstaller) break;
+                                }
+                            }
+                        } catch (error) {
+                            console.error(`[ScanInstallers] Error scanning subdirectory ${folderPath}:`, error);
+                        }
+                    }
+                    
+                    if (hasInstaller) {
+                        installers.push({
+                            folderPath: installerPath,
+                            gameName: entry.name,
+                            extractedPath: installerPath
+                        });
+                        console.log(`[ScanInstallers] Found installer in: ${installerPath}`);
+                    }
+                }
+            }
+            
+            return { success: true, installers };
+        } catch (error) {
+            console.error('[ScanInstallers] Error scanning download folder:', error);
+            return { success: false, error: error.message, installers: [] };
+        }
     });
 
     // Diagnostic function to check a specific folder

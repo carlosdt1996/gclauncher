@@ -207,6 +207,78 @@ function App() {
           setInstallFolder(iFolder || '');
           setTempInstallFolder(iFolder || '');
 
+          // Scan download folder for extracted installers
+          try {
+            console.log('[Frontend] Scanning download folder for installers...');
+            const scanResult = await window.electronAPI.scanDownloadFolderForInstallers();
+            console.log('[Frontend] Scan result:', scanResult);
+            
+            if (scanResult.success && scanResult.installers && scanResult.installers.length > 0) {
+              console.log('[Frontend] Found extracted installers:', scanResult.installers);
+              
+              // Get current games list to check if already installed
+              const currentGames = await window.electronAPI.getGames();
+              const installedGameNames = new Set(currentGames.map(g => g.name.toLowerCase()));
+              console.log('[Frontend] Installed games:', Array.from(installedGameNames));
+              
+              // Add each installer to rdDownloads with ready-to-install status
+              // Only add if game is not already installed
+              const installerEntries = scanResult.installers
+                .filter(installer => {
+                  const isInstalled = installedGameNames.has(installer.gameName.toLowerCase());
+                  console.log(`[Frontend] Checking ${installer.gameName}: installed=${isInstalled}`);
+                  return !isInstalled;
+                })
+                .map((installer, index) => ({
+                  id: `extracted-installer-${Date.now()}-${index}`,
+                  filename: installer.gameName,
+                  gameName: installer.gameName,
+                  status: 'ready-to-install',
+                  percentage: 100,
+                  extractedPath: installer.extractedPath,
+                  downloadPaths: [] // No downloaded files, already extracted
+                }));
+              
+              console.log(`[Frontend] Installer entries to add: ${installerEntries.length}`);
+              
+              if (installerEntries.length > 0) {
+                setRdDownloads(prev => {
+                  // Avoid duplicates by checking if gameName already exists
+                  const existingNames = new Set(prev.map(d => d.gameName));
+                  const newEntries = installerEntries.filter(e => !existingNames.has(e.gameName));
+                  console.log(`[Frontend] Adding ${newEntries.length} new installer(s) to rdDownloads`);
+                  const updated = [...prev, ...newEntries];
+                  console.log(`[Frontend] Total rdDownloads after adding: ${updated.length}`);
+                  
+                  // Automatically expand Download Manager and show notification if there are installers ready
+                  if (newEntries.length > 0) {
+                    setTimeout(() => {
+                      setShowDownloadManager(true);
+                      console.log('[Frontend] Download Manager expanded automatically');
+                      
+                      // Show notification to user
+                      const gameNames = newEntries.map(e => e.gameName).join(', ');
+                      const message = newEntries.length === 1 
+                        ? `¡Tienes 1 juego listo para instalar: ${gameNames}`
+                        : `¡Tienes ${newEntries.length} juegos listos para instalar: ${gameNames}`;
+                      showToast(message, 'success', 8000);
+                    }, 500);
+                  }
+                  
+                  return updated;
+                });
+                
+                console.log(`[Frontend] Added ${installerEntries.length} installer(s) ready to install, Download Manager should be visible`);
+              } else {
+                console.log('[Frontend] All found installers are already installed');
+              }
+            } else {
+              console.log('[Frontend] No installers found in download folder');
+            }
+          } catch (error) {
+            console.error('[Frontend] Error scanning download folder for installers:', error);
+          }
+
           // Listen for games updated event
           if (window.electronAPI.onGamesUpdated) {
             window.electronAPI.onGamesUpdated(async () => {
@@ -843,9 +915,14 @@ function App() {
           throw new Error(`Failed to download file: ${linkData.filename} - ${downloadResult.error}`);
         }
 
-        // Mark this file as completed
+        // Mark this file as completed and save the download path
         setRdDownloads(prev => prev.map(d =>
-          d.id === fileDownloadId ? { ...d, status: 'completed', percentage: 100 } : d
+          d.id === fileDownloadId ? { 
+            ...d, 
+            status: 'completed', 
+            percentage: 100,
+            downloadPath: downloadResult.path // Save the downloaded file path
+          } : d
         ));
 
         downloadedFiles++;
@@ -885,6 +962,17 @@ function App() {
       
       console.log('[Frontend] Output directory for extraction:', outputDir);
 
+      // Collect all download paths before consolidating
+      const allDownloadPaths = [];
+      setRdDownloads(prev => {
+        prev.forEach(d => {
+          if (d.gameName === gameName && d.status === 'completed' && d.downloadPath) {
+            allDownloadPaths.push(d.downloadPath);
+          }
+        });
+        return prev;
+      });
+
       // Find the first completed download entry for this game and transition it to extraction
       // Remove other completed file downloads for the same game to consolidate
       setRdDownloads(prev => {
@@ -899,7 +987,8 @@ function App() {
               percentage: 0,
               loaded: 0,
               total: 100,
-              progressStep: 'Extracting archive...'
+              progressStep: 'Extracting archive...',
+              downloadPaths: allDownloadPaths // Store all download paths for later deletion
             };
           }
           // Remove other completed file downloads for the same game
@@ -917,21 +1006,32 @@ function App() {
       if (extractResult.success) {
         const extractedPath = extractResult.outputDir;
 
-        // Update the extraction entry to completed
+        // Ensure window is visible and focused before showing confirmation
+        if (window.electronAPI && window.electronAPI.restoreAndFocusWindow) {
+          await window.electronAPI.restoreAndFocusWindow();
+        }
+
+        // Update the extraction entry to ready-to-install
+        // Preserve downloadPaths from the extraction entry
         setRdDownloads(prev => prev.map(d =>
           d.gameName === gameName && d.status === 'extracting'
-            ? { ...d, status: 'completed', percentage: 100 }
+            ? { 
+                ...d, 
+                status: 'ready-to-install', 
+                percentage: 100,
+                extractedPath: extractedPath, // Store path for installation
+                downloadPaths: d.downloadPaths || [] // Preserve download paths for deletion
+              }
             : d
         ));
 
-        // Post-download automation
-        let shouldInstall = false;
+        showToast(`Download and extraction complete: ${gameName}`, 'success');
 
-        // Virus scan integration (Scan the extracted folder? Or the installer?)
-        // For now, we'll skip auto-scan of folder as it might be huge.
-        // We can try to find the installer and scan that.
-
-        shouldInstall = await showConfirmation(`Download and extraction complete: ${gameName}\n\nDo you want to install this game now?`, 'Install Game');
+        // Ask user if they want to install the game
+        const shouldInstall = await showConfirmation(
+          `Extraction complete: ${gameName}\n\nThe game files have been extracted successfully.\n\nDo you want to install this game now?`,
+          'Install Game'
+        );
 
         if (shouldInstall) {
           // 1. Launch Installer
@@ -955,53 +1055,118 @@ function App() {
           console.log('[Frontend] Waiting 3 seconds for installation to complete...');
           await new Promise(resolve => setTimeout(resolve, 3000));
 
-          // 4. Find game executables in the designated install folder
-          // Use installFolder from settings, or fall back to extractedPath if not set
-          const installPath = installFolder || extractedPath;
-          console.log('[Frontend] Scanning for executables in designated game folder:', installPath);
-          
-          if (!installFolder) {
-            console.warn('[Frontend] No install folder set in settings, using extracted path. Consider setting an install folder in settings.');
-          }
-          
-          const executableResult = await window.electronAPI.findGameExecutables(installPath);
-          
+          // 4. Verify that the game was actually installed
+          // IMPORTANT: Only verify if installFolder is set. Without it, we cannot verify installation.
+          let gameInstalled = false;
+          let installPath = null;
           let gameExecutable = '';
-          if (executableResult.success && executableResult.primaryExecutable) {
-            // Extract just the filename from the full path
-            const lastSeparator = Math.max(
-              executableResult.primaryExecutable.lastIndexOf('\\'),
-              executableResult.primaryExecutable.lastIndexOf('/')
-            );
-            gameExecutable = lastSeparator !== -1 
-              ? executableResult.primaryExecutable.substring(lastSeparator + 1)
-              : executableResult.primaryExecutable;
-            console.log('[Frontend] Found game executable:', gameExecutable);
-          } else {
-            console.warn('[Frontend] No executable found in game folder, user will need to set it manually');
-          }
 
-          // 5. Add to Library (only after setup.exe finishes and executable is found)
-          await window.electronAPI.addCustomGame({
-            name: gameName,
-            installPath: installPath,
-            executable: gameExecutable,
-            addedAt: Date.now()
-          });
-
-          // Refresh library
-          const updatedGames = await window.electronAPI.getGames();
-          setGames(updatedGames);
-
-          // Fetch SteamGridDB image if needed
-          if (!image) {
-            const img = await window.electronAPI.getGameImage(gameName);
-            if (img) {
-              setImages(prev => ({ ...prev, [updatedGames.find(g => g.name === gameName)?.id]: img }));
+          if (installFolder && installFolder.trim()) {
+            // If install folder is set, scan it to see if the game was installed
+            console.log('[Frontend] Verifying installation in install folder:', installFolder);
+            const scanResult = await window.electronAPI.scanInstallFolder();
+            
+            if (scanResult.success) {
+              // Check if the game was found in the scan
+              const updatedGames = await window.electronAPI.getGames();
+              const installedGame = updatedGames.find(g => 
+                g.name.toLowerCase() === gameName.toLowerCase() && 
+                g.platform === 'custom' &&
+                g.installDir &&
+                g.installDir.toLowerCase().startsWith(installFolder.toLowerCase())
+              );
+              
+              if (installedGame) {
+                gameInstalled = true;
+                installPath = installedGame.installDir;
+                gameExecutable = installedGame.executable || '';
+                console.log('[Frontend] Game verified as installed:', installPath);
+              } else {
+                console.warn('[Frontend] Game not found in install folder after installation. Installation may have been cancelled.');
+              }
             }
+          } else {
+            // No install folder configured - cannot verify installation
+            // Do NOT add game to library automatically
+            console.warn('[Frontend] No install folder set. Cannot verify installation. Game will NOT be added to library automatically.');
+            console.warn('[Frontend] Please configure an install folder in settings, then manually scan for installed games.');
           }
 
-          showToast(`${gameName} has been added to your library!${gameExecutable ? `\n\nExecutable found: ${gameExecutable}` : '\n\nNote: No executable was auto-detected. You may need to set it manually in game settings.'}`, 'success');
+          // 5. Only add to library and clean up if game was actually installed
+          if (gameInstalled && installPath) {
+            // Add to Library (only if game was verified as installed)
+            await window.electronAPI.addCustomGame({
+              name: gameName,
+              installPath: installPath,
+              executable: gameExecutable,
+              addedAt: Date.now()
+            });
+
+            // Refresh library
+            const updatedGames = await window.electronAPI.getGames();
+            setGames(updatedGames);
+
+            // Fetch SteamGridDB image if needed
+            if (!image) {
+              const img = await window.electronAPI.getGameImage(gameName);
+              if (img) {
+                setImages(prev => ({ ...prev, [updatedGames.find(g => g.name === gameName)?.id]: img }));
+              }
+            }
+
+            // Clean up downloaded files and extraction folder after successful installation
+            // Get download paths from the download entry
+            const downloadEntry = rdDownloads.find(d => d.gameName === gameName && d.status === 'ready-to-install');
+            const downloadPaths = downloadEntry?.downloadPaths || [];
+            
+            // Delete downloaded RAR files
+            if (downloadPaths.length > 0) {
+              try {
+                console.log('[Frontend] Deleting downloaded files:', downloadPaths);
+                for (const filePath of downloadPaths) {
+                  try {
+                    await window.electronAPI.deleteDownloadedFile(filePath);
+                    console.log('[Frontend] Deleted:', filePath);
+                  } catch (deleteError) {
+                    console.error('[Frontend] Error deleting file:', filePath, deleteError);
+                  }
+                }
+              } catch (error) {
+                console.error('[Frontend] Error deleting downloaded files:', error);
+              }
+            }
+
+            // Delete extraction folder (where setup.exe was located)
+            if (extractedPath && extractedPath !== installPath) {
+              try {
+                console.log('[Frontend] Deleting extraction folder:', extractedPath);
+                const deleteFolderResult = await window.electronAPI.deleteDownloadedFolder(extractedPath);
+                if (deleteFolderResult.success) {
+                  console.log('[Frontend] Successfully deleted extraction folder:', extractedPath);
+                } else {
+                  console.warn('[Frontend] Failed to delete extraction folder:', deleteFolderResult.error);
+                }
+              } catch (error) {
+                console.error('[Frontend] Error deleting extraction folder:', error);
+              }
+            }
+
+            // Remove from downloads list
+            setRdDownloads(prev => prev.filter(d => d.gameName !== gameName || d.status !== 'ready-to-install'));
+            
+            showToast(`Installation files cleaned up.`, 'info');
+            showToast(`${gameName} has been added to your library!${gameExecutable ? `\n\nExecutable found: ${gameExecutable}` : '\n\nNote: No executable was auto-detected. You may need to set it manually in game settings.'}`, 'success');
+          } else {
+            // Installation was cancelled, failed, or cannot be verified - don't clean up, keep as ready-to-install
+            if (!installFolder || !installFolder.trim()) {
+              console.warn('[Frontend] Cannot verify installation: No install folder configured.');
+              showToast(`No se pudo verificar la instalación. Por favor, configura una carpeta de instalación en Configuración y luego escanea manualmente para encontrar juegos instalados.`, 'warning');
+            } else {
+              console.warn('[Frontend] Game installation was not verified. Keeping files and status as ready-to-install.');
+              showToast(`La instalación no se pudo verificar. El juego puede no haberse instalado correctamente. Los archivos siguen disponibles para intentar instalar de nuevo.`, 'warning');
+            }
+            // Status remains as 'ready-to-install', so user can try again
+          }
         }
       } else {
         console.error('[Frontend] Extraction failed:', extractResult.error);
@@ -1846,12 +2011,13 @@ function App() {
           ? d.gameName === progress.gameName
           : d.filename === progress.filename || d.filename === progress.gameName;
         
-        if (matches && (d.status === 'extracting' || d.status === 'completed')) {
+        // Only update if status is 'extracting' - don't override 'ready-to-install' or other states
+        if (matches && d.status === 'extracting') {
           return {
             ...d,
             status: 'extracting',
-            percentage: progress.percent,
-            loaded: progress.percent,
+            percentage: progress.percent || 0,
+            loaded: progress.percent || 0,
             total: 100
           };
         }
@@ -1860,6 +2026,20 @@ function App() {
     });
 
   }, []);
+
+  // Debug: Log rdDownloads changes
+  useEffect(() => {
+    console.log('[Frontend] rdDownloads state changed:', rdDownloads.length, 'items');
+    if (rdDownloads.length > 0) {
+      console.log('[Frontend] rdDownloads items:', rdDownloads.map(d => ({ 
+        gameName: d.gameName, 
+        status: d.status, 
+        extractedPath: d.extractedPath 
+      })));
+    }
+    console.log('[Frontend] showDownloadManager:', showDownloadManager);
+    console.log('[Frontend] downloads.length:', downloads.length, 'rdDownloads.length:', rdDownloads.length);
+  }, [rdDownloads, showDownloadManager, downloads]);
 
   return (
     <div className="app">
@@ -2373,9 +2553,26 @@ function App() {
 
         {/* Download Manager */}
         {(downloads.length > 0 || rdDownloads.length > 0) && (
-          <div className={`download-manager ${showDownloadManager ? 'expanded' : 'minimized'}`}>
+          <div 
+            className={`download-manager ${showDownloadManager ? 'expanded' : 'minimized'}`} 
+            style={{ 
+              display: 'block',
+              visibility: 'visible',
+              opacity: 1
+            }}
+          >
             <div className="download-manager-header" onClick={() => setShowDownloadManager(!showDownloadManager)}>
               <h3>Downloads ({downloads.length + rdDownloads.length})</h3>
+              {rdDownloads.some(d => d.status === 'ready-to-install') && (
+                <span style={{ 
+                  color: '#4caf50', 
+                  fontSize: '0.85rem', 
+                  marginRight: '10px',
+                  fontWeight: 'bold'
+                }}>
+                  ⚠️ {rdDownloads.filter(d => d.status === 'ready-to-install').length} ready to install
+                </span>
+              )}
               <button className="toggle-btn">{showDownloadManager ? '▼' : '▲'}</button>
             </div>
             {showDownloadManager && (
@@ -2384,50 +2581,239 @@ function App() {
                 {rdDownloads.map((download, index) => (
                   <div key={`rd-${download.filename}-${index}`} className="download-item">
                     <div className="download-info">
-                      <h4>{download.filename}</h4>
-                      <div className="progress-bar">
-                        <div
-                          className="progress-fill"
-                          style={{ width: `${download.percentage || 0}%` }}
-                        ></div>
-                      </div>
-                      <div className="download-stats">
-                        <span>
-                          {download.status === 'preparing'
-                            ? (download.progressStep || 'Preparing...')
-                            : download.status === 'extracting'
-                              ? 'Extracting...'
-                              : (download.percentage || 0) + '%'
-                          }
-                        </span>
-                        <span>
-                          {download.status === 'preparing'
-                            ? ''
-                            : download.status === 'extracting'
-                              ? `${Math.round(download.percentage)}%`
-                              : `${((download.loaded || 0) / 1024 / 1024).toFixed(2)} MB / ${((download.total || 0) / 1024 / 1024).toFixed(2)} MB`
-                          }
-                        </span>
-                        <span>Real-Debrid</span>
-                      </div>
+                      <h4>{download.filename || download.gameName}</h4>
+                      {download.status === 'ready-to-install' ? (
+                        <div style={{ 
+                          padding: '10px', 
+                          background: 'rgba(76, 175, 80, 0.1)', 
+                          borderRadius: '6px',
+                          margin: '10px 0',
+                          border: '1px solid rgba(76, 175, 80, 0.3)'
+                        }}>
+                          <p style={{ margin: 0, color: '#4caf50', fontWeight: 'bold' }}>
+                            ✓ Ready to Install
+                          </p>
+                        </div>
+                      ) : download.status === 'installing' ? (
+                        <div style={{ 
+                          padding: '10px', 
+                          background: 'rgba(102, 126, 234, 0.1)', 
+                          borderRadius: '6px',
+                          margin: '10px 0',
+                          border: '1px solid rgba(102, 126, 234, 0.3)'
+                        }}>
+                          <p style={{ margin: 0, color: '#667eea', fontWeight: 'bold' }}>
+                            Installing...
+                          </p>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="progress-bar">
+                            <div
+                              className="progress-fill"
+                              style={{ width: `${download.percentage || 0}%` }}
+                            ></div>
+                          </div>
+                          <div className="download-stats">
+                            <span>
+                              {download.status === 'preparing'
+                                ? (download.progressStep || 'Preparing...')
+                                : download.status === 'extracting'
+                                  ? 'Extracting...'
+                                  : (download.percentage || 0) + '%'
+                              }
+                            </span>
+                            <span>
+                              {download.status === 'preparing'
+                                ? ''
+                                : download.status === 'extracting'
+                                  ? `${Math.round(download.percentage)}%`
+                                  : `${((download.loaded || 0) / 1024 / 1024).toFixed(2)} MB / ${((download.total || 0) / 1024 / 1024).toFixed(2)} MB`
+                              }
+                            </span>
+                            <span>Real-Debrid</span>
+                          </div>
+                        </>
+                      )}
                     </div>
                     <div className="download-controls">
-                      <button
-                        onClick={async () => {
-                          // Handle preparing state cancellation
-                          if (download.status === 'preparing' && download.id) {
-                            cancelledDownloads.current.add(download.id);
-                          }
+                      {download.status === 'ready-to-install' ? (
+                        <button
+                          onClick={async () => {
+                            try {
+                              // Update status to installing
+                              setRdDownloads(prev => prev.map((d, i) => 
+                                i === index ? { ...d, status: 'installing' } : d
+                              ));
 
-                          // Cancel the download
-                          await window.electronAPI.rdCancelDownload(download.filename);
-                          // Remove from UI
-                          setRdDownloads(prev => prev.filter((_, i) => i !== index));
-                        }}
-                        className="btn-secondary"
-                      >
-                        Cancel
-                      </button>
+                              const extractedPath = download.extractedPath;
+                              if (!extractedPath) {
+                                showToast('Extracted path not found', 'error');
+                                setRdDownloads(prev => prev.map((d, i) => 
+                                  i === index ? { ...d, status: 'ready-to-install' } : d
+                                ));
+                                return;
+                              }
+
+                              // Launch Installer
+                              const installResult = await window.electronAPI.runInstaller(extractedPath);
+
+                              if (!installResult.success) {
+                                showToast('Could not find setup.exe automatically. Please check the download folder.', 'warning');
+                                setRdDownloads(prev => prev.map((d, i) => 
+                                  i === index ? { ...d, status: 'ready-to-install' } : d
+                                ));
+                                return;
+                              }
+
+                              // Wait a bit for files to be written after installer finishes
+                              await new Promise(resolve => setTimeout(resolve, 3000));
+
+                              // Verify that the game was actually installed
+                              const gameNameForInstall = download.gameName || download.filename;
+                              let gameInstalled = false;
+                              let installPath = null;
+                              let gameExecutable = '';
+
+                              if (installFolder && installFolder.trim()) {
+                                // If install folder is set, scan it to see if the game was installed
+                                console.log('[Frontend] Verifying installation in install folder:', installFolder);
+                                const scanResult = await window.electronAPI.scanInstallFolder();
+                                
+                                if (scanResult.success) {
+                                  // Check if the game was found in the scan
+                                  const updatedGames = await window.electronAPI.getGames();
+                                  const installedGame = updatedGames.find(g => 
+                                    g.name.toLowerCase() === gameNameForInstall.toLowerCase() && 
+                                    g.platform === 'custom' &&
+                                    g.installDir &&
+                                    g.installDir.toLowerCase().startsWith(installFolder.toLowerCase())
+                                  );
+                                  
+                                  if (installedGame) {
+                                    gameInstalled = true;
+                                    installPath = installedGame.installDir;
+                                    gameExecutable = installedGame.executable || '';
+                                    console.log('[Frontend] Game verified as installed:', installPath);
+                                  } else {
+                                    console.warn('[Frontend] Game not found in install folder after installation. Installation may have been cancelled.');
+                                  }
+                                }
+                              } else {
+                                // No install folder configured - cannot verify installation
+                                // Do NOT add game to library automatically
+                                console.warn('[Frontend] No install folder set. Cannot verify installation. Game will NOT be added to library automatically.');
+                                console.warn('[Frontend] Please configure an install folder in settings, then manually scan for installed games.');
+                              }
+
+                              // Only add to library and clean up if game was actually installed
+                              if (gameInstalled && installPath) {
+                                // Add to Library (only if game was verified as installed)
+                                await window.electronAPI.addCustomGame({
+                                  name: gameNameForInstall,
+                                  installPath: installPath,
+                                  executable: gameExecutable,
+                                  addedAt: Date.now()
+                                });
+
+                                // Refresh library
+                                const updatedGames = await window.electronAPI.getGames();
+                                setGames(updatedGames);
+
+                                // Fetch SteamGridDB image if needed
+                                if (apiKey) {
+                                  const img = await window.electronAPI.getGameImage(gameNameForInstall);
+                                  if (img) {
+                                    setImages(prev => ({ ...prev, [updatedGames.find(g => g.name === gameNameForInstall)?.id]: img }));
+                                  }
+                                }
+
+                                // Clean up downloaded files and extraction folder after successful installation
+                                // Delete downloaded RAR files
+                                const downloadPaths = download.downloadPaths || [];
+                                if (downloadPaths.length > 0) {
+                                  try {
+                                    console.log('[Frontend] Deleting downloaded files:', downloadPaths);
+                                    for (const filePath of downloadPaths) {
+                                      try {
+                                        await window.electronAPI.deleteDownloadedFile(filePath);
+                                        console.log('[Frontend] Deleted:', filePath);
+                                      } catch (deleteError) {
+                                        console.error('[Frontend] Error deleting file:', filePath, deleteError);
+                                      }
+                                    }
+                                  } catch (error) {
+                                    console.error('[Frontend] Error deleting downloaded files:', error);
+                                  }
+                                }
+
+                                // Delete extraction folder (where setup.exe was located)
+                                if (extractedPath && extractedPath !== installPath) {
+                                  try {
+                                    console.log('[Frontend] Deleting extraction folder:', extractedPath);
+                                    const deleteFolderResult = await window.electronAPI.deleteDownloadedFolder(extractedPath);
+                                    if (deleteFolderResult.success) {
+                                      console.log('[Frontend] Successfully deleted extraction folder:', extractedPath);
+                                    } else {
+                                      console.warn('[Frontend] Failed to delete extraction folder:', deleteFolderResult.error);
+                                    }
+                                  } catch (error) {
+                                    console.error('[Frontend] Error deleting extraction folder:', error);
+                                  }
+                                }
+
+                                showToast(`Installation files cleaned up.`, 'info');
+                                // Remove from downloads list
+                                setRdDownloads(prev => prev.filter((_, i) => i !== index));
+                                showToast(`${download.gameName || download.filename} has been installed and added to your library!${gameExecutable ? `\n\nExecutable found: ${gameExecutable}` : '\n\nNote: No executable was auto-detected. You may need to set it manually in game settings.'}`, 'success');
+                              } else {
+                                // Installation was cancelled, failed, or cannot be verified - don't clean up, keep as ready-to-install
+                                if (!installFolder || !installFolder.trim()) {
+                                  console.warn('[Frontend] Cannot verify installation: No install folder configured.');
+                                  showToast(`No se pudo verificar la instalación. Por favor, configura una carpeta de instalación en Configuración y luego escanea manualmente para encontrar juegos instalados.`, 'warning');
+                                } else {
+                                  console.warn('[Frontend] Game installation was not verified. Keeping files and status as ready-to-install.');
+                                  showToast(`La instalación no se pudo verificar. El juego puede no haberse instalado correctamente. Los archivos siguen disponibles para intentar instalar de nuevo.`, 'warning');
+                                }
+                                // Reset status back to ready-to-install
+                                setRdDownloads(prev => prev.map((d, i) => 
+                                  i === index ? { ...d, status: 'ready-to-install' } : d
+                                ));
+                              }
+                            } catch (error) {
+                              console.error('Error installing game:', error);
+                              showToast('Error installing game: ' + error.message, 'error');
+                              setRdDownloads(prev => prev.map((d, i) => 
+                                i === index ? { ...d, status: 'ready-to-install' } : d
+                              ));
+                            }
+                          }}
+                          className="btn-primary"
+                        >
+                          📦 Instalar
+                        </button>
+                      ) : download.status === 'installing' ? (
+                        <button className="btn-secondary" disabled>
+                          Installing...
+                        </button>
+                      ) : (
+                        <button
+                          onClick={async () => {
+                            // Handle preparing state cancellation
+                            if (download.status === 'preparing' && download.id) {
+                              cancelledDownloads.current.add(download.id);
+                            }
+
+                            // Cancel the download
+                            await window.electronAPI.rdCancelDownload(download.filename);
+                            // Remove from UI
+                            setRdDownloads(prev => prev.filter((_, i) => i !== index));
+                          }}
+                          className="btn-secondary"
+                        >
+                          Cancel
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -2540,6 +2926,76 @@ function App() {
                     onChange={(e) => setTempDownloadFolder(e.target.value)}
                     placeholder="C:\Users\Name\Downloads\FitGirl Repacks"
                   />
+                  <button 
+                    className="btn-secondary" 
+                    onClick={async () => {
+                      try {
+                        showToast('Scanning download folder for installers...', 'info');
+                        console.log('[Frontend] Manual scan triggered');
+                        const scanResult = await window.electronAPI.scanDownloadFolderForInstallers();
+                        console.log('[Frontend] Manual scan result:', scanResult);
+                        
+                        if (scanResult.success && scanResult.installers && scanResult.installers.length > 0) {
+                          console.log('[Frontend] Found extracted installers:', scanResult.installers);
+                          
+                          // Get current games list to check if already installed
+                          const currentGames = await window.electronAPI.getGames();
+                          const installedGameNames = new Set(currentGames.map(g => g.name.toLowerCase()));
+                          console.log('[Frontend] Installed games:', Array.from(installedGameNames));
+                          
+                          // Add each installer to rdDownloads with ready-to-install status
+                          const installerEntries = scanResult.installers
+                            .filter(installer => {
+                              const isInstalled = installedGameNames.has(installer.gameName.toLowerCase());
+                              console.log(`[Frontend] Checking ${installer.gameName}: installed=${isInstalled}`);
+                              return !isInstalled;
+                            })
+                            .map((installer, index) => ({
+                              id: `extracted-installer-${Date.now()}-${index}`,
+                              filename: installer.gameName,
+                              gameName: installer.gameName,
+                              status: 'ready-to-install',
+                              percentage: 100,
+                              extractedPath: installer.extractedPath,
+                              downloadPaths: []
+                            }));
+                          
+                          if (installerEntries.length > 0) {
+                            setRdDownloads(prev => {
+                              const existingNames = new Set(prev.map(d => d.gameName));
+                              const newEntries = installerEntries.filter(e => !existingNames.has(e.gameName));
+                              console.log(`[Frontend] Adding ${newEntries.length} new installer(s) to rdDownloads`);
+                              const updated = [...prev, ...newEntries];
+                              console.log(`[Frontend] Total rdDownloads: ${updated.length}`);
+                              
+                              // Force show Download Manager
+                              setTimeout(() => {
+                                setShowDownloadManager(true);
+                                console.log('[Frontend] Download Manager should be visible now');
+                              }, 100);
+                              
+                              return updated;
+                            });
+                            
+                            showToast(`Found ${installerEntries.length} installer(s) ready to install!`, 'success');
+                          } else {
+                            showToast('All found installers are already installed.', 'info');
+                          }
+                        } else {
+                          showToast('No installers found in download folder.', 'info');
+                        }
+                      } catch (error) {
+                        console.error('[Frontend] Error scanning download folder:', error);
+                        showToast('Error scanning download folder: ' + error.message, 'error');
+                      }
+                    }}
+                    style={{ marginTop: '10px' }}
+                  >
+                    🔍 Scan for Installers
+                  </button>
+                  <p className="setting-help" style={{ fontSize: '0.85rem', marginTop: '5px' }}>
+                    Scans the download folder for extracted game installers that are ready to install
+                  </p>
                 </div>
 
                 <div className="setting-group">

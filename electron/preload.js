@@ -43,7 +43,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     runInstaller: (folderPath) => ipcRenderer.invoke('run-installer', folderPath),
     findGameExecutables: (gameFolderPath) => ipcRenderer.invoke('find-game-executables', gameFolderPath),
     scanInstallFolder: () => ipcRenderer.invoke('scan-install-folder'),
+    scanDownloadFolderForInstallers: () => ipcRenderer.invoke('scan-download-folder-for-installers'),
     diagnoseGameFolder: (folderPath) => ipcRenderer.invoke('diagnose-game-folder', folderPath),
+    deleteDownloadedFile: (filePath) => ipcRenderer.invoke('delete-downloaded-file', filePath),
+    deleteDownloadedFolder: (folderPath) => ipcRenderer.invoke('delete-downloaded-folder', folderPath),
     extractArchive: (filePath, outputDir) => ipcRenderer.invoke('extract-archive', { filePath, outputDir }),
     onExtractionProgress: (callback) => ipcRenderer.on('extraction-progress', (event, data) => callback(data)),
     onGamesUpdated: (callback) => ipcRenderer.on('games-updated', callback),
@@ -69,4 +72,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
     scanHashVirustotal: (hash) => ipcRenderer.invoke('scan-hash-virustotal', hash),
     // Window controls
     toggleFullscreen: () => ipcRenderer.invoke('toggle-fullscreen'),
+    restoreAndFocusWindow: () => ipcRenderer.invoke('restore-and-focus-window'),
 });

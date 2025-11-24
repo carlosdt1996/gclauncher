@@ -663,6 +663,7 @@ body:not(.tv-theme) .game-card {
 
 .download-manager.minimized {
   height: 50px;
+  overflow: visible;
 }
 
 .download-manager.expanded {
