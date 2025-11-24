@@ -14,7 +14,7 @@ import torrentManager from './utils/torrent-manager.js';
 import { getFileReport, calculateFileHash } from './utils/virustotal.js';
 import * as realDebrid from './utils/real-debrid.js';
 import * as torrentSearch from './utils/torrent-search.js';
-import { extractArchive, isArchive, findMainArchive } from './utils/extractor.js';
+import { extractArchive, isArchive, findMainArchive, findISO } from './utils/extractor.js';
 import processMonitor from './utils/process-monitor.js';
 import os from 'os';
 import fs from 'fs';
@@ -698,6 +698,15 @@ app.on('ready', async () => {
                 console.log('[Main] No nested archives found');
             }
 
+            // Check for ISO files in the output directory
+            console.log('[Main] Checking for ISO files...');
+            const isoFile = findISO(finalOutputDir);
+
+            if (isoFile) {
+                console.log('[Main] Found ISO file:', isoFile);
+                return { success: true, outputDir: finalOutputDir, isoFile: isoFile };
+            }
+
             return { success: true, outputDir: finalOutputDir };
         } catch (error) {
             console.error('[Main] Extraction error:', error);
@@ -1021,6 +1030,527 @@ app.on('ready', async () => {
 
         return executables;
     }
+
+    /**
+     * Mount an ISO file and return the drive letter
+     */
+    async function mountISO(isoPath) {
+        return new Promise((resolve, reject) => {
+            console.log('[ISO] Mounting ISO:', isoPath);
+            
+            // Use PowerShell to mount the ISO
+            const psCommand = `$mount = Mount-DiskImage -ImagePath "${isoPath.replace(/"/g, '`"')}" -PassThru; $mount | Get-Volume | Select-Object -ExpandProperty DriveLetter`;
+            
+            exec(`powershell -Command "${psCommand}"`, (error, stdout, stderr) => {
+                if (error) {
+                    console.error('[ISO] Error mounting ISO:', error);
+                    reject(new Error(`Failed to mount ISO: ${error.message}`));
+                    return;
+                }
+                
+                const driveLetter = stdout.trim();
+                if (driveLetter && driveLetter.length === 1) {
+                    const drivePath = `${driveLetter}:\\`;
+                    console.log('[ISO] ISO mounted to drive:', drivePath);
+                    resolve(drivePath);
+                } else {
+                    console.error('[ISO] Invalid drive letter received:', driveLetter);
+                    reject(new Error('Failed to get drive letter after mounting ISO'));
+                }
+            });
+        });
+    }
+
+    /**
+     * Unmount an ISO file by drive letter or path
+     */
+    async function unmountISO(driveLetterOrPath) {
+        return new Promise((resolve, reject) => {
+            if (!driveLetterOrPath) {
+                console.warn('[ISO] No drive path provided for unmounting');
+                resolve(true);
+                return;
+            }
+            
+            console.log('[ISO] Unmounting ISO:', driveLetterOrPath);
+            
+            let driveLetter = driveLetterOrPath;
+            if (driveLetterOrPath.length > 1) {
+                // Extract drive letter from path (e.g., "D:\" -> "D")
+                driveLetter = driveLetterOrPath.charAt(0);
+            }
+            
+            // Use PowerShell to unmount the ISO - improved command that finds the ISO by drive letter
+            const psCommand = `$vol = Get-Volume -DriveLetter ${driveLetter} -ErrorAction SilentlyContinue; if ($vol) { $disk = Get-Disk -Number $vol.DriveType; Get-DiskImage | Where-Object { $_.DeviceID -eq $disk.Number } | Dismount-DiskImage -ErrorAction SilentlyContinue; if ($?) { Write-Output "Unmounted" } else { Write-Output "NotMounted" } } else { Write-Output "DriveNotFound" }`;
+            
+            exec(`powershell -Command "${psCommand}"`, (error, stdout, stderr) => {
+                const output = stdout ? stdout.trim() : '';
+                
+                if (error) {
+                    console.error('[ISO] Error unmounting ISO:', error);
+                    // Try alternative method
+                    console.log('[ISO] Trying alternative unmount method...');
+                    const altCommand = `Dismount-DiskImage -ImagePath (Get-DiskImage | Where-Object { (Get-Volume -DriveLetter ${driveLetter} -ErrorAction SilentlyContinue) -ne $null } | Select-Object -First 1 -ExpandProperty ImagePath) -ErrorAction SilentlyContinue`;
+                    exec(`powershell -Command "${altCommand}"`, (altError, altStdout, altStderr) => {
+                        if (altError) {
+                            console.warn('[ISO] Could not unmount ISO with alternative method, it may already be unmounted');
+                        } else {
+                            console.log('[ISO] ISO unmounted successfully with alternative method');
+                        }
+                        resolve(true);
+                    });
+                } else if (output.includes('Unmounted')) {
+                    console.log('[ISO] ISO unmounted successfully');
+                    resolve(true);
+                } else if (output.includes('NotMounted') || output.includes('DriveNotFound')) {
+                    console.log('[ISO] ISO already unmounted or drive not found');
+                    resolve(true);
+                } else {
+                    console.log('[ISO] ISO unmount completed (status unclear, assuming success)');
+                    resolve(true);
+                }
+            });
+        });
+    }
+
+    /**
+     * Find setup.exe in a mounted ISO drive
+     * Prioritizes the main installer and avoids redistributable installers
+     */
+    function findSetupInISO(drivePath) {
+        const installerNames = ['setup.exe', 'install.exe', 'installer.exe', 'Setup.exe', 'Install.exe'];
+        
+        // Directories to skip (redistributibles and utilities)
+        const skipDirectories = [
+            'redist', '_redist', 'redistributables', 'redistributable',
+            'directx', 'directx_', 'dx', 'dxsetup',
+            'vcredist', 'vc_redist', 'vc++', 'vc_',
+            'dotnet', '.net', 'netframework',
+            'physx', 'nvidia',
+            'openal', 'openal32',
+            'xna', 'xnafx',
+            'gfwl', 'games for windows',
+            'installshield', 'isxdl',
+            'temp', 'tmp', 'cache',
+            'tools', 'utilities', 'utils'
+        ];
+        
+        // Helper function to check if a directory should be skipped
+        function shouldSkipDirectory(dirName) {
+            const dirLower = dirName.toLowerCase();
+            return skipDirectories.some(skip => dirLower.includes(skip));
+        }
+        
+        // Priority 1: Check root of ISO first (most common location for main installer)
+        for (const installerName of installerNames) {
+            const testPath = path.join(drivePath, installerName);
+            if (fs.existsSync(testPath)) {
+                console.log('[ISO] Found installer in root (PRIORITY):', testPath);
+                return testPath;
+            }
+        }
+        
+        // Priority 2: Search subdirectories, but skip redistributable folders
+        const foundInstallers = [];
+        
+        try {
+            const entries = fs.readdirSync(drivePath, { withFileTypes: true });
+            for (const entry of entries) {
+                if (entry.isDirectory()) {
+                    // Skip redistributable directories
+                    if (shouldSkipDirectory(entry.name)) {
+                        console.log('[ISO] Skipping redistributable directory:', entry.name);
+                        continue;
+                    }
+                    
+                    const subPath = path.join(drivePath, entry.name);
+                    
+                    // Check for installer in this subdirectory
+                    for (const installerName of installerNames) {
+                        const testPath = path.join(subPath, installerName);
+                        if (fs.existsSync(testPath)) {
+                            const stats = fs.statSync(testPath);
+                            foundInstallers.push({
+                                path: testPath,
+                                size: stats.size,
+                                depth: 1,
+                                dirName: entry.name
+                            });
+                        }
+                    }
+                    
+                    // Check one more level deep (but still skip redistributibles)
+                    try {
+                        const subEntries = fs.readdirSync(subPath, { withFileTypes: true });
+                        for (const subEntry of subEntries) {
+                            if (subEntry.isDirectory()) {
+                                // Skip redistributable directories even at level 2
+                                if (shouldSkipDirectory(subEntry.name)) {
+                                    continue;
+                                }
+                                
+                                const subSubPath = path.join(subPath, subEntry.name);
+                                for (const installerName of installerNames) {
+                                    const testPath = path.join(subSubPath, installerName);
+                                    if (fs.existsSync(testPath)) {
+                                        const stats = fs.statSync(testPath);
+                                        foundInstallers.push({
+                                            path: testPath,
+                                            size: stats.size,
+                                            depth: 2,
+                                            dirName: path.join(entry.name, subEntry.name)
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    } catch (err) {
+                        // Ignore errors in deeper levels
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('[ISO] Error searching for installer in ISO:', error);
+        }
+        
+        // If we found multiple installers, prioritize:
+        // 1. The largest one (main installer is usually bigger)
+        // 2. The one at depth 1 (closer to root)
+        if (foundInstallers.length > 0) {
+            // Sort by size (largest first), then by depth (shallower first)
+            foundInstallers.sort((a, b) => {
+                if (b.size !== a.size) {
+                    return b.size - a.size; // Larger first
+                }
+                return a.depth - b.depth; // Shallower first
+            });
+            
+            const selected = foundInstallers[0];
+            console.log('[ISO] Selected installer from subdirectory:', selected.path);
+            console.log('[ISO]   Size:', (selected.size / 1024 / 1024).toFixed(2), 'MB');
+            console.log('[ISO]   Directory:', selected.dirName);
+            return selected.path;
+        }
+        
+        return null;
+    }
+
+    /**
+     * Mount ISO and run installer
+     */
+    ipcMain.handle('mount-iso-and-install', async (event, isoPathOrParams) => {
+        // Handle both old format (string) and new format (object)
+        let isoPath, outputDir, downloadPaths;
+        if (typeof isoPathOrParams === 'string') {
+            // Old format: just the ISO path
+            isoPath = isoPathOrParams;
+            outputDir = null;
+            downloadPaths = null;
+        } else if (isoPathOrParams && typeof isoPathOrParams === 'object') {
+            // New format: object with isoPath, outputDir, downloadPaths
+            isoPath = isoPathOrParams.isoPath;
+            outputDir = isoPathOrParams.outputDir;
+            downloadPaths = isoPathOrParams.downloadPaths;
+        } else {
+            return { success: false, error: 'Invalid parameters' };
+        }
+        
+        let drivePath = null;
+        try {
+            console.log('[ISO] Mounting ISO and looking for installer:', isoPath);
+            console.log('[ISO] Output directory to clean:', outputDir);
+            console.log('[ISO] Download paths to clean:', downloadPaths);
+            
+            // Notify frontend: mounting ISO
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('iso-progress', {
+                    stage: 'mounting',
+                    message: 'Montando ISO...'
+                });
+            }
+            
+            // Mount the ISO
+            drivePath = await mountISO(isoPath);
+            
+            // Notify frontend: ISO mounted, searching for installer
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('iso-progress', {
+                    stage: 'mounted',
+                    message: 'ISO montado. Buscando instalador...',
+                    drivePath: drivePath
+                });
+            }
+            
+            // Find setup.exe in the mounted ISO
+            const installerPath = findSetupInISO(drivePath);
+            
+            if (!installerPath) {
+                // Unmount before returning error
+                await unmountISO(drivePath);
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('iso-progress', {
+                        stage: 'error',
+                        message: 'No se encontró instalador en el ISO'
+                    });
+                }
+                return { success: false, error: 'No installer found in ISO', drivePath: null };
+            }
+            
+            console.log('[ISO] Launching installer from ISO:', installerPath);
+            
+            // Notify frontend: installer found, launching
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('iso-progress', {
+                    stage: 'installing',
+                    message: 'Ejecutando instalador...',
+                    installerPath: installerPath
+                });
+            }
+            
+            // Launch the installer
+            await shell.openPath(installerPath);
+            
+            // Get the installer process name
+            const installerProcessName = path.basename(installerPath);
+            
+            // Wait for installer to finish
+            console.log('[ISO] Waiting for installer to finish...');
+            try {
+                await waitForProcessToFinish(installerProcessName);
+                console.log('[ISO] Installer finished successfully');
+                
+                // Notify frontend: installation finished
+                if (mainWindow && !mainWindow.isDestroyed()) {
+                    mainWindow.webContents.send('iso-progress', {
+                        stage: 'finished',
+                        message: 'Instalación completada. Desmontando ISO...'
+                    });
+                }
+                
+                // Wait a moment before unmounting to ensure installer has fully released resources
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                
+                // Unmount the ISO after installation
+                console.log('[ISO] Unmounting ISO after installation...');
+                try {
+                    await unmountISO(drivePath);
+                    console.log('[ISO] ISO successfully unmounted');
+                } catch (unmountError) {
+                    console.error('[ISO] Error unmounting ISO:', unmountError);
+                    // Try one more time after a delay
+                    console.log('[ISO] Retrying unmount after delay...');
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    await unmountISO(drivePath);
+                }
+                
+                // Clean up downloaded and extracted files
+                console.log('[ISO] Cleaning up downloaded and extracted files...');
+                try {
+                    // Delete the ISO file
+                    if (isoPath && fs.existsSync(isoPath)) {
+                        console.log('[ISO] Deleting ISO file:', isoPath);
+                        fs.unlinkSync(isoPath);
+                        console.log('[ISO] ISO file deleted successfully');
+                    }
+                    
+                    // Delete the output directory (extracted files)
+                    if (outputDir && fs.existsSync(outputDir)) {
+                        console.log('[ISO] Deleting extracted directory:', outputDir);
+                        fs.rmSync(outputDir, { recursive: true, force: true });
+                        console.log('[ISO] Extracted directory deleted successfully');
+                    }
+                    
+                    // Delete downloaded files
+                    if (downloadPaths && Array.isArray(downloadPaths)) {
+                        for (const downloadPath of downloadPaths) {
+                            if (downloadPath && fs.existsSync(downloadPath)) {
+                                try {
+                                    const stats = fs.statSync(downloadPath);
+                                    if (stats.isFile()) {
+                                        console.log('[ISO] Deleting downloaded file:', downloadPath);
+                                        fs.unlinkSync(downloadPath);
+                                        console.log('[ISO] Downloaded file deleted successfully');
+                                    } else if (stats.isDirectory()) {
+                                        console.log('[ISO] Deleting downloaded directory:', downloadPath);
+                                        fs.rmSync(downloadPath, { recursive: true, force: true });
+                                        console.log('[ISO] Downloaded directory deleted successfully');
+                                    }
+                                } catch (deleteError) {
+                                    console.warn('[ISO] Could not delete download path:', downloadPath, deleteError);
+                                }
+                            }
+                        }
+                    }
+                    
+                    console.log('[ISO] Cleanup completed successfully');
+                } catch (cleanupError) {
+                    console.error('[ISO] Error during cleanup:', cleanupError);
+                    // Don't fail the whole operation if cleanup fails
+                }
+                
+                return { 
+                    success: true, 
+                    path: installerPath, 
+                    finished: true, 
+                    drivePath: null,
+                    installerExecutable: installerProcessName
+                };
+            } catch (error) {
+                console.error('[ISO] Error waiting for installer:', error);
+                // Even if installer is still running, try to unmount after a delay
+                // The user can manually unmount if needed
+                console.log('[ISO] Installer may still be running, will attempt unmount after delay...');
+                
+                // Try to unmount after 30 seconds (installer might finish quickly)
+                setTimeout(async () => {
+                    try {
+                        // Check if installer process is still running
+                        exec(`tasklist /FI "IMAGENAME eq ${installerProcessName}" /FO CSV /NH`, async (checkError, checkStdout) => {
+                            const isRunning = checkStdout && checkStdout.toLowerCase().includes(installerProcessName.toLowerCase());
+                            
+                            if (!isRunning) {
+                                console.log('[ISO] Installer process no longer running, unmounting ISO...');
+                                try {
+                                    await unmountISO(drivePath);
+                                    console.log('[ISO] ISO unmounted after delay');
+                                    
+                                    // Clean up files after unmounting
+                                    try {
+                                        if (isoPath && fs.existsSync(isoPath)) {
+                                            fs.unlinkSync(isoPath);
+                                            console.log('[ISO] ISO file deleted after delay');
+                                        }
+                                        if (outputDir && fs.existsSync(outputDir)) {
+                                            fs.rmSync(outputDir, { recursive: true, force: true });
+                                            console.log('[ISO] Extracted directory deleted after delay');
+                                        }
+                                        if (downloadPaths && Array.isArray(downloadPaths)) {
+                                            for (const downloadPath of downloadPaths) {
+                                                if (downloadPath && fs.existsSync(downloadPath)) {
+                                                    try {
+                                                        const stats = fs.statSync(downloadPath);
+                                                        if (stats.isFile()) {
+                                                            fs.unlinkSync(downloadPath);
+                                                        } else if (stats.isDirectory()) {
+                                                            fs.rmSync(downloadPath, { recursive: true, force: true });
+                                                        }
+                                                    } catch (deleteError) {
+                                                        console.warn('[ISO] Could not delete download path:', downloadPath);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } catch (cleanupError) {
+                                        console.warn('[ISO] Error during delayed cleanup:', cleanupError);
+                                    }
+                                    
+                                    // Notify frontend
+                                    if (mainWindow && !mainWindow.isDestroyed()) {
+                                        mainWindow.webContents.send('iso-progress', {
+                                            stage: 'finished',
+                                            message: 'Instalación completada. ISO desmontado y archivos eliminados.'
+                                        });
+                                    }
+                                } catch (unmountError) {
+                                    console.warn('[ISO] Could not unmount ISO automatically:', unmountError);
+                                }
+                            } else {
+                                console.log('[ISO] Installer still running, will retry unmount later...');
+                                // Try again after 5 minutes
+                                setTimeout(async () => {
+                                    try {
+                                        await unmountISO(drivePath);
+                                        console.log('[ISO] ISO unmounted after extended delay');
+                                        
+                                        // Clean up files
+                                        try {
+                                            if (isoPath && fs.existsSync(isoPath)) {
+                                                fs.unlinkSync(isoPath);
+                                            }
+                                            if (outputDir && fs.existsSync(outputDir)) {
+                                                fs.rmSync(outputDir, { recursive: true, force: true });
+                                            }
+                                            if (downloadPaths && Array.isArray(downloadPaths)) {
+                                                for (const downloadPath of downloadPaths) {
+                                                    if (downloadPath && fs.existsSync(downloadPath)) {
+                                                        try {
+                                                            const stats = fs.statSync(downloadPath);
+                                                            if (stats.isFile()) {
+                                                                fs.unlinkSync(downloadPath);
+                                                            } else if (stats.isDirectory()) {
+                                                                fs.rmSync(downloadPath, { recursive: true, force: true });
+                                                            }
+                                                        } catch (deleteError) {
+                                                            // Ignore
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        } catch (cleanupError) {
+                                            console.warn('[ISO] Error during extended cleanup:', cleanupError);
+                                        }
+                                    } catch (unmountError) {
+                                        console.warn('[ISO] Could not unmount ISO automatically. User may need to unmount manually.');
+                                    }
+                                }, 300000); // 5 minutes
+                            }
+                        });
+                    } catch (checkError) {
+                        console.warn('[ISO] Could not check installer status, attempting unmount anyway...');
+                        try {
+                            await unmountISO(drivePath);
+                        } catch (unmountError) {
+                            console.warn('[ISO] Could not unmount ISO automatically.');
+                        }
+                    }
+                }, 30000); // 30 seconds
+                
+                return { 
+                    success: true, 
+                    path: installerPath, 
+                    finished: false, 
+                    error: error.message, 
+                    drivePath: drivePath,
+                    installerExecutable: installerProcessName
+                };
+            }
+        } catch (error) {
+            console.error('[ISO] Error mounting ISO or running installer:', error);
+            
+            // Try to unmount if ISO was mounted but error occurred
+            if (drivePath) {
+                console.log('[ISO] Attempting to unmount ISO after error...');
+                try {
+                    await unmountISO(drivePath);
+                    console.log('[ISO] ISO unmounted after error');
+                } catch (unmountError) {
+                    console.warn('[ISO] Could not unmount ISO after error:', unmountError);
+                }
+            }
+            
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('iso-progress', {
+                    stage: 'error',
+                    message: `Error: ${error.message}`
+                });
+            }
+            return { success: false, error: error.message, drivePath: null };
+        }
+    });
+
+    /**
+     * Manually unmount an ISO by drive path
+     */
+    ipcMain.handle('unmount-iso', async (event, drivePath) => {
+        try {
+            console.log('[ISO] Manual unmount request for:', drivePath);
+            await unmountISO(drivePath);
+            return { success: true };
+        } catch (error) {
+            console.error('[ISO] Error in manual unmount:', error);
+            return { success: false, error: error.message };
+        }
+    });
 
     /**
      * Wait for a process to finish

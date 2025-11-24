@@ -1011,49 +1011,211 @@ function App() {
           await window.electronAPI.restoreAndFocusWindow();
         }
 
-        // Update the extraction entry to ready-to-install
-        // Preserve downloadPaths from the extraction entry
-        setRdDownloads(prev => prev.map(d =>
-          d.gameName === gameName && d.status === 'extracting'
-            ? { 
-                ...d, 
-                status: 'ready-to-install', 
-                percentage: 100,
-                extractedPath: extractedPath, // Store path for installation
-                downloadPaths: d.downloadPaths || [] // Preserve download paths for deletion
-              }
-            : d
-        ));
+        // Check if an ISO file was found
+        let isoInstallFinished = false;
+        let isoDrivePath = null; // Store ISO drive path for potential unmounting
+        if (extractResult.isoFile) {
+          console.log('[Frontend] ISO file detected:', extractResult.isoFile);
+          // Extract filename from path (works in both Windows and Unix)
+          const isoFileName = extractResult.isoFile.split(/[/\\]/).pop() || extractResult.isoFile;
+          
+          // Update status to ready-to-install with ISO info
+          setRdDownloads(prev => prev.map(d =>
+            d.gameName === gameName && d.status === 'extracting'
+              ? { 
+                  ...d, 
+                  status: 'ready-to-install', 
+                  percentage: 100,
+                  extractedPath: extractedPath,
+                  isoFile: extractResult.isoFile,
+                  downloadPaths: d.downloadPaths || []
+                }
+              : d
+          ));
 
-        showToast(`Download and extraction complete: ${gameName}`, 'success');
+          showToast(`ISO detectado: ${isoFileName}`, 'info');
+          
+          // Ask user if they want to mount ISO and install
+          const shouldMountISO = await showConfirmation(
+            `Se ha detectado un archivo ISO: ${isoFileName}\n\n¿Quieres montar el ISO e instalar el juego ahora?`,
+            'Montar ISO e Instalar'
+          );
 
-        // Ask user if they want to install the game
-        const shouldInstall = await showConfirmation(
-          `Extraction complete: ${gameName}\n\nThe game files have been extracted successfully.\n\nDo you want to install this game now?`,
-          'Install Game'
-        );
-
-        if (shouldInstall) {
-          // 1. Launch Installer
-          const installResult = await window.electronAPI.runInstaller(extractedPath);
-
-          if (!installResult.success) {
-            showToast('Could not find setup.exe automatically. Please check the download folder.', 'warning');
+          if (!shouldMountISO) {
+            // User declined, keep as ready-to-install
+            showToast(`El ISO está listo para montar cuando quieras.`, 'info');
             return;
           }
 
-          // 2. Wait for installer to finish (if it's still running)
-          if (!installResult.finished) {
-            console.log('[Frontend] Waiting for installer to finish...');
-            // The backend already waits, but we check the result
-            if (installResult.error) {
-              console.warn('[Frontend] Installer may still be running:', installResult.error);
+          // Get download paths from the download entry before updating status
+          let downloadPathsToClean = [];
+          let extractedPathToClean = extractedPath;
+          setRdDownloads(prev => {
+            const downloadEntry = prev.find(d => d.gameName === gameName && d.status === 'ready-to-install');
+            if (downloadEntry) {
+              downloadPathsToClean = downloadEntry.downloadPaths || [];
             }
-          }
+            return prev.map(d =>
+              d.gameName === gameName && d.status === 'ready-to-install'
+                ? { 
+                    ...d, 
+                    status: 'mounting-iso', 
+                    isoFile: extractResult.isoFile,
+                    progressStep: 'Montando ISO...'
+                  }
+                : d
+            );
+          });
 
-          // 3. Wait a bit for files to be written after installer finishes
-          console.log('[Frontend] Waiting 3 seconds for installation to complete...');
-          await new Promise(resolve => setTimeout(resolve, 3000));
+          // Mount ISO and run installer
+          const isoInstallResult = await window.electronAPI.mountISOAndInstall(
+            extractResult.isoFile,
+            extractedPathToClean,
+            downloadPathsToClean
+          );
+          
+          if (isoInstallResult.success) {
+            // Store drive path for potential unmounting if installation is cancelled
+            isoDrivePath = isoInstallResult.drivePath;
+            
+            if (isoInstallResult.finished) {
+              showToast(`Instalación desde ISO completada: ${gameName}`, 'success');
+              isoInstallFinished = true;
+              
+              // Update status and wait a bit for files to be written
+              setRdDownloads(prev => prev.map(d =>
+                d.gameName === gameName && (d.status === 'installing-from-iso' || d.status === 'installing' || d.status === 'mounted-iso')
+                  ? { 
+                      ...d, 
+                      status: 'verifying-installation',
+                      progressStep: 'Verificando instalación...',
+                      installerExecutable: isoInstallResult.installerExecutable || d.installerExecutable,
+                      isoDrivePath: isoDrivePath // Store for potential unmount
+                    }
+                  : d
+              ));
+              
+              // Wait a bit for files to be written after installer finishes
+              console.log('[Frontend] Waiting 3 seconds for installation to complete...');
+              await new Promise(resolve => setTimeout(resolve, 3000));
+              
+              // Continue with verification and cleanup as normal
+              // Note: The ISO should be unmounted by the backend, but we keep isoDrivePath
+              // in case we need to unmount it if verification fails
+            } else {
+              showToast(`Instalador desde ISO iniciado. El ISO se desmontará automáticamente cuando termine la instalación.`, 'info');
+              // Store drive path for potential unmounting if installation is cancelled
+              const drivePath = isoInstallResult.drivePath;
+              
+              // Update download entry with drive path
+              setRdDownloads(prev => prev.map(d =>
+                d.gameName === gameName && (d.status === 'mounting-iso' || d.status === 'mounted-iso' || d.status === 'installing-from-iso')
+                  ? { ...d, isoDrivePath: drivePath }
+                  : d
+              ));
+              
+              // Set up a listener to check if installer finishes later
+              // Also set a timeout to attempt unmount after reasonable time
+              if (drivePath) {
+                // Try to unmount after 10 minutes as a safety measure
+                setTimeout(async () => {
+                  console.log('[Frontend] Safety timeout: attempting to unmount ISO...');
+                  try {
+                    if (window.electronAPI && window.electronAPI.unmountISO) {
+                      await window.electronAPI.unmountISO(drivePath);
+                      console.log('[Frontend] ISO unmounted after safety timeout');
+                    }
+                  } catch (error) {
+                    console.warn('[Frontend] Could not unmount ISO after timeout:', error);
+                  }
+                }, 600000); // 10 minutes
+              }
+              
+              // Don't proceed with verification yet, wait for user to finish installation
+              // Status will be updated by the ISO progress listener
+              return;
+            }
+          } else {
+            showToast(`Error al montar ISO: ${isoInstallResult.error}`, 'error');
+            // Update status back to ready-to-install
+            setRdDownloads(prev => prev.map(d =>
+              d.gameName === gameName && (d.status === 'mounting-iso' || d.status === 'mounted-iso' || d.status === 'installing-from-iso')
+                ? { 
+                    ...d, 
+                    status: 'ready-to-install', 
+                    extractedPath: extractedPath,
+                    downloadPaths: d.downloadPaths || []
+                  }
+                : d
+            ));
+            return;
+          }
+        }
+
+        // Update the extraction entry to ready-to-install (only if not already updated by ISO handling)
+        if (!extractResult.isoFile) {
+          setRdDownloads(prev => prev.map(d =>
+            d.gameName === gameName && d.status === 'extracting'
+              ? { 
+                  ...d, 
+                  status: 'ready-to-install', 
+                  percentage: 100,
+                  extractedPath: extractedPath, // Store path for installation
+                  downloadPaths: d.downloadPaths || [] // Preserve download paths for deletion
+                }
+              : d
+          ));
+        }
+
+        showToast(`Download and extraction complete: ${gameName}`, 'success');
+
+        // Ask user if they want to install the game (only if no ISO was processed)
+        let shouldInstall = false;
+        if (!extractResult.isoFile) {
+          shouldInstall = await showConfirmation(
+            `Extraction complete: ${gameName}\n\nThe game files have been extracted successfully.\n\nDo you want to install this game now?`,
+            'Install Game'
+          );
+        } else {
+          // If ISO was processed and installation finished, we already installed
+          shouldInstall = true;
+        }
+
+        if (shouldInstall) {
+          // Check if this was installed from ISO (skip runInstaller if so)
+          const wasInstalledFromISO = extractResult.isoFile && isoInstallFinished;
+          // Store isoDrivePath for potential unmounting if verification fails
+          let currentIsoDrivePath = null;
+          if (wasInstalledFromISO) {
+            const isoDownloadEntry = rdDownloads.find(d => d.gameName === gameName && d.isoFile);
+            currentIsoDrivePath = isoDownloadEntry?.isoDrivePath || null;
+          }
+          
+          if (!wasInstalledFromISO) {
+            // 1. Launch Installer (only if not installed from ISO)
+            const installResult = await window.electronAPI.runInstaller(extractedPath);
+
+            if (!installResult.success) {
+              showToast('Could not find setup.exe automatically. Please check the download folder.', 'warning');
+              return;
+            }
+
+            // 2. Wait for installer to finish (if it's still running)
+            if (!installResult.finished) {
+              console.log('[Frontend] Waiting for installer to finish...');
+              // The backend already waits, but we check the result
+              if (installResult.error) {
+                console.warn('[Frontend] Installer may still be running:', installResult.error);
+              }
+            }
+
+            // 3. Wait a bit for files to be written after installer finishes
+            console.log('[Frontend] Waiting 3 seconds for installation to complete...');
+            await new Promise(resolve => setTimeout(resolve, 3000));
+          } else {
+            // Already waited 3 seconds after ISO installation, status is already set to verifying-installation
+            console.log('[Frontend] Installation from ISO completed, proceeding with verification...');
+          }
 
           // 4. Verify that the game was actually installed
           // IMPORTANT: Only verify if installFolder is set. Without it, we cannot verify installation.
@@ -1064,26 +1226,58 @@ function App() {
           if (installFolder && installFolder.trim()) {
             // If install folder is set, scan it to see if the game was installed
             console.log('[Frontend] Verifying installation in install folder:', installFolder);
-            const scanResult = await window.electronAPI.scanInstallFolder();
             
-            if (scanResult.success) {
-              // Check if the game was found in the scan
-              const updatedGames = await window.electronAPI.getGames();
-              const installedGame = updatedGames.find(g => 
-                g.name.toLowerCase() === gameName.toLowerCase() && 
-                g.platform === 'custom' &&
-                g.installDir &&
-                g.installDir.toLowerCase().startsWith(installFolder.toLowerCase())
-              );
+            // Try multiple times to find the game (it might take a moment to appear)
+            let installedGame = null;
+            let attempts = 0;
+            const maxAttempts = 5;
+            
+            while (attempts < maxAttempts && !installedGame) {
+              const scanResult = await window.electronAPI.scanInstallFolder();
               
-              if (installedGame) {
-                gameInstalled = true;
-                installPath = installedGame.installDir;
-                gameExecutable = installedGame.executable || '';
-                console.log('[Frontend] Game verified as installed:', installPath);
+              if (scanResult.success) {
+                // Check if the game was found in the scan
+                const updatedGames = await window.electronAPI.getGames();
+                installedGame = updatedGames.find(g => 
+                  g.name.toLowerCase() === gameName.toLowerCase() && 
+                  g.platform === 'custom' &&
+                  g.installDir &&
+                  g.installDir.toLowerCase().startsWith(installFolder.toLowerCase())
+                );
+                
+                if (installedGame) {
+                  gameInstalled = true;
+                  installPath = installedGame.installDir;
+                  gameExecutable = installedGame.executable || '';
+                  console.log('[Frontend] Game verified as installed:', installPath);
+                  break;
+                } else {
+                  attempts++;
+                  if (attempts < maxAttempts) {
+                    console.log(`[Frontend] Game not found yet, waiting 2 seconds before retry ${attempts + 1}/${maxAttempts}...`);
+                    // Update progress step
+                    setRdDownloads(prev => prev.map(d =>
+                      d.gameName === gameName && d.status === 'verifying-installation'
+                        ? { 
+                            ...d, 
+                            progressStep: `Verificando instalación... (intento ${attempts + 1}/${maxAttempts})`
+                          }
+                        : d
+                    ));
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                  }
+                }
               } else {
-                console.warn('[Frontend] Game not found in install folder after installation. Installation may have been cancelled.');
+                console.warn('[Frontend] Scan failed, retrying...');
+                attempts++;
+                if (attempts < maxAttempts) {
+                  await new Promise(resolve => setTimeout(resolve, 2000));
+                }
               }
+            }
+            
+            if (!installedGame) {
+              console.warn('[Frontend] Game not found in install folder after multiple attempts. Installation may have been cancelled or game installed to different location.');
             }
           } else {
             // No install folder configured - cannot verify installation
@@ -1115,8 +1309,14 @@ function App() {
             }
 
             // Clean up downloaded files and extraction folder after successful installation
-            // Get download paths from the download entry
-            const downloadEntry = rdDownloads.find(d => d.gameName === gameName && d.status === 'ready-to-install');
+            // Get download paths from the download entry (check multiple statuses)
+            const downloadEntry = rdDownloads.find(d => 
+              d.gameName === gameName && 
+              (d.status === 'ready-to-install' || 
+               d.status === 'verifying-installation' || 
+               d.status === 'installing-from-iso' ||
+               d.status === 'installing')
+            );
             const downloadPaths = downloadEntry?.downloadPaths || [];
             
             // Delete downloaded RAR files
@@ -1151,19 +1351,68 @@ function App() {
               }
             }
 
-            // Remove from downloads list
-            setRdDownloads(prev => prev.filter(d => d.gameName !== gameName || d.status !== 'ready-to-install'));
+            // Remove from downloads list (remove all entries for this game regardless of status)
+            setRdDownloads(prev => prev.filter(d => d.gameName !== gameName));
             
             showToast(`Installation files cleaned up.`, 'info');
             showToast(`${gameName} has been added to your library!${gameExecutable ? `\n\nExecutable found: ${gameExecutable}` : '\n\nNote: No executable was auto-detected. You may need to set it manually in game settings.'}`, 'success');
           } else {
             // Installation was cancelled, failed, or cannot be verified - don't clean up, keep as ready-to-install
+            
+            // If this was an ISO installation, unmount the ISO
+            const downloadEntry = rdDownloads.find(d => 
+              d.gameName === gameName && 
+              (d.status === 'ready-to-install' || 
+               d.status === 'verifying-installation' || 
+               d.status === 'installing-from-iso' ||
+               d.status === 'installing' ||
+               d.status === 'mounted-iso' ||
+               d.status === 'mounting-iso')
+            );
+            
+            // Check if this was an ISO installation (either from extractResult or downloadEntry)
+            const wasISOInstallation = extractResult.isoFile || (downloadEntry && downloadEntry.isoFile);
+            // Get isoDrivePath from multiple possible sources
+            // Note: If isoInstallResult.finished was true, the backend already unmounted the ISO
+            // so isoDrivePath might be null, but we still need to check if it's mounted
+            const isoDrivePathToUnmount = downloadEntry?.isoDrivePath || 
+                                         currentIsoDrivePath ||
+                                         (extractResult.isoFile && !isoInstallFinished ? isoDrivePath : null);
+            
+            if (wasISOInstallation && isoDrivePathToUnmount) {
+              console.log('[Frontend] Installation cancelled/failed, attempting to unmount ISO...');
+              try {
+                await window.electronAPI.unmountISO(isoDrivePathToUnmount);
+                console.log('[Frontend] ISO unmounted successfully after cancelled installation');
+                showToast('ISO desmontado correctamente.', 'info');
+              } catch (unmountError) {
+                console.warn('[Frontend] Could not unmount ISO (may already be unmounted):', unmountError);
+                // ISO might already be unmounted by the backend, which is fine
+              }
+            } else if (wasISOInstallation && !isoDrivePathToUnmount) {
+              // ISO installation but no drive path - backend already unmounted it
+              console.log('[Frontend] ISO was already unmounted by backend after installer finished');
+            }
+            
+            // Update status to ready-to-install and clear drive path
+            setRdDownloads(prev => prev.map(d =>
+              d.gameName === gameName && (d.status === 'verifying-installation' || d.status === 'installing-from-iso' || d.status === 'installing' || d.status === 'mounted-iso' || d.status === 'mounting-iso')
+                ? { 
+                    ...d, 
+                    status: 'ready-to-install',
+                    isoDrivePath: undefined, // Clear drive path
+                    progressStep: undefined // Clear progress step
+                  }
+                : d
+            ));
+            
             if (!installFolder || !installFolder.trim()) {
               console.warn('[Frontend] Cannot verify installation: No install folder configured.');
               showToast(`No se pudo verificar la instalación. Por favor, configura una carpeta de instalación en Configuración y luego escanea manualmente para encontrar juegos instalados.`, 'warning');
             } else {
               console.warn('[Frontend] Game installation was not verified. Keeping files and status as ready-to-install.');
-              showToast(`La instalación no se pudo verificar. El juego puede no haberse instalado correctamente. Los archivos siguen disponibles para intentar instalar de nuevo.`, 'warning');
+              const isoMessage = wasISOInstallation ? ' El ISO ha sido desmontado.' : '';
+              showToast(`La instalación fue cancelada o no se pudo verificar.${isoMessage} Puedes intentar instalar de nuevo.`, 'warning');
             }
             // Status remains as 'ready-to-install', so user can try again
           }
@@ -2025,6 +2274,51 @@ function App() {
       }));
     });
 
+    // ISO progress listener
+    if (window.electronAPI.onISOProgress) {
+      window.electronAPI.onISOProgress((progress) => {
+        setRdDownloads(prev => prev.map(d => {
+          // Update downloads that have an ISO file and are in installing state
+          if (d.isoFile && (d.status === 'installing' || d.status === 'mounting-iso')) {
+            let newStatus = d.status;
+            let progressStep = d.progressStep || '';
+            
+            switch (progress.stage) {
+              case 'mounting':
+                newStatus = 'mounting-iso';
+                progressStep = 'Montando ISO...';
+                break;
+              case 'mounted':
+                newStatus = 'mounted-iso';
+                progressStep = 'ISO montado. Buscando instalador...';
+                break;
+              case 'installing':
+                newStatus = 'installing-from-iso';
+                progressStep = `Ejecutando instalador: ${progress.installerPath ? progress.installerPath.split(/[/\\]/).pop() : 'setup.exe'}`;
+                break;
+              case 'finished':
+                newStatus = 'installing';
+                progressStep = 'Instalación completada. Verificando...';
+                break;
+              case 'error':
+                newStatus = 'ready-to-install';
+                progressStep = `Error: ${progress.message}`;
+                break;
+            }
+            
+            return {
+              ...d,
+              status: newStatus,
+              progressStep: progressStep,
+              isoDrivePath: progress.drivePath || d.isoDrivePath,
+              installerExecutable: progress.installerPath ? progress.installerPath.split(/[/\\]/).pop() : d.installerExecutable
+            };
+          }
+          return d;
+        }));
+      });
+    }
+
   }, []);
 
   // Debug: Log rdDownloads changes
@@ -2594,6 +2888,74 @@ function App() {
                             ✓ Ready to Install
                           </p>
                         </div>
+                      ) : download.status === 'mounting-iso' ? (
+                        <div style={{ 
+                          padding: '10px', 
+                          background: 'rgba(255, 193, 7, 0.1)', 
+                          borderRadius: '6px',
+                          margin: '10px 0',
+                          border: '1px solid rgba(255, 193, 7, 0.3)'
+                        }}>
+                          <p style={{ margin: 0, color: '#ffc107', fontWeight: 'bold' }}>
+                            💿 Montando ISO...
+                          </p>
+                          {download.progressStep && (
+                            <p style={{ margin: '5px 0 0 0', fontSize: '0.85rem', color: 'rgba(255, 193, 7, 0.8)' }}>
+                              {download.progressStep}
+                            </p>
+                          )}
+                        </div>
+                      ) : download.status === 'mounted-iso' ? (
+                        <div style={{ 
+                          padding: '10px', 
+                          background: 'rgba(76, 175, 80, 0.1)', 
+                          borderRadius: '6px',
+                          margin: '10px 0',
+                          border: '1px solid rgba(76, 175, 80, 0.3)'
+                        }}>
+                          <p style={{ margin: 0, color: '#4caf50', fontWeight: 'bold' }}>
+                            💿 ISO Montado
+                          </p>
+                          {download.progressStep && (
+                            <p style={{ margin: '5px 0 0 0', fontSize: '0.85rem', color: 'rgba(76, 175, 80, 0.8)' }}>
+                              {download.progressStep}
+                            </p>
+                          )}
+                        </div>
+                      ) : download.status === 'installing-from-iso' ? (
+                        <div style={{ 
+                          padding: '10px', 
+                          background: 'rgba(102, 126, 234, 0.1)', 
+                          borderRadius: '6px',
+                          margin: '10px 0',
+                          border: '1px solid rgba(102, 126, 234, 0.3)'
+                        }}>
+                          <p style={{ margin: 0, color: '#667eea', fontWeight: 'bold' }}>
+                            💿 Instalando desde ISO...
+                          </p>
+                          {download.progressStep && (
+                            <p style={{ margin: '5px 0 0 0', fontSize: '0.85rem', color: 'rgba(102, 126, 234, 0.8)' }}>
+                              {download.progressStep}
+                            </p>
+                          )}
+                        </div>
+                      ) : download.status === 'verifying-installation' ? (
+                        <div style={{ 
+                          padding: '10px', 
+                          background: 'rgba(156, 39, 176, 0.1)', 
+                          borderRadius: '6px',
+                          margin: '10px 0',
+                          border: '1px solid rgba(156, 39, 176, 0.3)'
+                        }}>
+                          <p style={{ margin: 0, color: '#9c27b0', fontWeight: 'bold' }}>
+                            🔍 Verificando instalación...
+                          </p>
+                          {download.progressStep && (
+                            <p style={{ margin: '5px 0 0 0', fontSize: '0.85rem', color: 'rgba(156, 39, 176, 0.8)' }}>
+                              {download.progressStep}
+                            </p>
+                          )}
+                        </div>
                       ) : download.status === 'installing' ? (
                         <div style={{ 
                           padding: '10px', 
@@ -2641,33 +3003,93 @@ function App() {
                         <button
                           onClick={async () => {
                             try {
-                              // Update status to installing
-                              setRdDownloads(prev => prev.map((d, i) => 
-                                i === index ? { ...d, status: 'installing' } : d
-                              ));
-
                               const extractedPath = download.extractedPath;
-                              if (!extractedPath) {
-                                showToast('Extracted path not found', 'error');
+                              const isoFile = download.isoFile;
+                              
+                              // Check if this is an ISO file
+                              if (isoFile) {
+                                // Get download paths and extracted path from the download entry
+                                const downloadPathsToClean = download.downloadPaths || [];
+                                const extractedPathToClean = download.extractedPath || extractedPath;
+                                
+                                // Update status to mounting-iso
                                 setRdDownloads(prev => prev.map((d, i) => 
-                                  i === index ? { ...d, status: 'ready-to-install' } : d
+                                  i === index ? { ...d, status: 'mounting-iso', progressStep: 'Montando ISO...' } : d
                                 ));
-                                return;
+
+                                // Mount ISO and run installer
+                                const isoInstallResult = await window.electronAPI.mountISOAndInstall(
+                                  isoFile,
+                                  extractedPathToClean,
+                                  downloadPathsToClean
+                                );
+                                
+                                if (!isoInstallResult.success) {
+                                  showToast(`Error al montar ISO: ${isoInstallResult.error}`, 'error');
+                                  setRdDownloads(prev => prev.map((d, i) => 
+                                    i === index ? { ...d, status: 'ready-to-install' } : d
+                                  ));
+                                  return;
+                                }
+
+                                // Store drive path for potential unmounting if installation is cancelled
+                                const isoDrivePath = isoInstallResult.drivePath;
+
+                                if (isoInstallResult.finished) {
+                                  // Installation finished, continue with verification
+                                  setRdDownloads(prev => prev.map((d, i) => 
+                                    i === index ? { 
+                                      ...d, 
+                                      status: 'verifying-installation',
+                                      progressStep: 'Verificando instalación...',
+                                      installerExecutable: isoInstallResult.installerExecutable || d.installerExecutable,
+                                      isoDrivePath: isoDrivePath // Store for potential unmount
+                                    } : d
+                                  ));
+                                  
+                                  // Wait a bit for files to be written
+                                  await new Promise(resolve => setTimeout(resolve, 3000));
+                                  // Continue to verification below
+                                } else {
+                                  showToast(`Instalador desde ISO iniciado. El ISO se desmontará automáticamente cuando termine la instalación.`, 'info');
+                                  // Store drive path for potential unmounting
+                                  setRdDownloads(prev => prev.map((d, i) => 
+                                    i === index ? { ...d, isoDrivePath: isoDrivePath } : d
+                                  ));
+                                  // Don't proceed with verification yet
+                                  return;
+                                }
+                              } else {
+                                // Regular installer (not ISO)
+                                // Update status to installing
+                                setRdDownloads(prev => prev.map((d, i) => 
+                                  i === index ? { ...d, status: 'installing' } : d
+                                ));
+
+                                if (!extractedPath) {
+                                  showToast('Extracted path not found', 'error');
+                                  setRdDownloads(prev => prev.map((d, i) => 
+                                    i === index ? { ...d, status: 'ready-to-install' } : d
+                                  ));
+                                  return;
+                                }
+
+                                // Launch Installer
+                                const installResult = await window.electronAPI.runInstaller(extractedPath);
+
+                                if (!installResult.success) {
+                                  showToast('Could not find setup.exe automatically. Please check the download folder.', 'warning');
+                                  setRdDownloads(prev => prev.map((d, i) => 
+                                    i === index ? { ...d, status: 'ready-to-install' } : d
+                                  ));
+                                  return;
+                                }
+
+                                // Wait a bit for files to be written after installer finishes
+                                await new Promise(resolve => setTimeout(resolve, 3000));
                               }
 
-                              // Launch Installer
-                              const installResult = await window.electronAPI.runInstaller(extractedPath);
-
-                              if (!installResult.success) {
-                                showToast('Could not find setup.exe automatically. Please check the download folder.', 'warning');
-                                setRdDownloads(prev => prev.map((d, i) => 
-                                  i === index ? { ...d, status: 'ready-to-install' } : d
-                                ));
-                                return;
-                              }
-
-                              // Wait a bit for files to be written after installer finishes
-                              await new Promise(resolve => setTimeout(resolve, 3000));
+                              // Verification code (runs for both ISO and regular installers)
 
                               // Verify that the game was actually installed
                               const gameNameForInstall = download.gameName || download.filename;
@@ -2768,16 +3190,34 @@ function App() {
                                 showToast(`${download.gameName || download.filename} has been installed and added to your library!${gameExecutable ? `\n\nExecutable found: ${gameExecutable}` : '\n\nNote: No executable was auto-detected. You may need to set it manually in game settings.'}`, 'success');
                               } else {
                                 // Installation was cancelled, failed, or cannot be verified - don't clean up, keep as ready-to-install
+                                
+                                // If this was an ISO installation, unmount the ISO
+                                const currentDownload = rdDownloads[index];
+                                if (currentDownload && currentDownload.isoFile && currentDownload.isoDrivePath) {
+                                  console.log('[Frontend] Installation cancelled/failed, unmounting ISO...');
+                                  try {
+                                    await window.electronAPI.unmountISO(currentDownload.isoDrivePath);
+                                    console.log('[Frontend] ISO unmounted successfully after cancelled installation');
+                                    showToast('ISO desmontado correctamente.', 'info');
+                                  } catch (unmountError) {
+                                    console.warn('[Frontend] Could not unmount ISO:', unmountError);
+                                  }
+                                }
+                                
                                 if (!installFolder || !installFolder.trim()) {
                                   console.warn('[Frontend] Cannot verify installation: No install folder configured.');
                                   showToast(`No se pudo verificar la instalación. Por favor, configura una carpeta de instalación en Configuración y luego escanea manualmente para encontrar juegos instalados.`, 'warning');
                                 } else {
                                   console.warn('[Frontend] Game installation was not verified. Keeping files and status as ready-to-install.');
-                                  showToast(`La instalación no se pudo verificar. El juego puede no haberse instalado correctamente. Los archivos siguen disponibles para intentar instalar de nuevo.`, 'warning');
+                                  showToast(`La instalación fue cancelada o no se pudo verificar. El ISO ha sido desmontado. Puedes intentar instalar de nuevo.`, 'warning');
                                 }
-                                // Reset status back to ready-to-install
+                                // Reset status back to ready-to-install (keep isoFile for future attempts)
                                 setRdDownloads(prev => prev.map((d, i) => 
-                                  i === index ? { ...d, status: 'ready-to-install' } : d
+                                  i === index ? { 
+                                    ...d, 
+                                    status: 'ready-to-install',
+                                    isoDrivePath: undefined // Clear drive path
+                                  } : d
                                 ));
                               }
                             } catch (error) {
@@ -2790,7 +3230,14 @@ function App() {
                           }}
                           className="btn-primary"
                         >
-                          📦 Instalar
+                          {download.isoFile ? '💿 Montar ISO e Instalar' : '📦 Instalar'}
+                        </button>
+                      ) : download.status === 'mounting-iso' || download.status === 'mounted-iso' || download.status === 'installing-from-iso' || download.status === 'verifying-installation' ? (
+                        <button className="btn-secondary" disabled>
+                          {download.status === 'mounting-iso' && '💿 Montando ISO...'}
+                          {download.status === 'mounted-iso' && '💿 Buscando instalador...'}
+                          {download.status === 'installing-from-iso' && '💿 Instalando...'}
+                          {download.status === 'verifying-installation' && '🔍 Verificando...'}
                         </button>
                       ) : download.status === 'installing' ? (
                         <button className="btn-secondary" disabled>

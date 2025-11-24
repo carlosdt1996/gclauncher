@@ -49,6 +49,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     deleteDownloadedFolder: (folderPath) => ipcRenderer.invoke('delete-downloaded-folder', folderPath),
     extractArchive: (filePath, outputDir) => ipcRenderer.invoke('extract-archive', { filePath, outputDir }),
     onExtractionProgress: (callback) => ipcRenderer.on('extraction-progress', (event, data) => callback(data)),
+    mountISOAndInstall: (isoPath, outputDir, downloadPaths) => ipcRenderer.invoke('mount-iso-and-install', { isoPath, outputDir, downloadPaths }),
+    onISOProgress: (callback) => ipcRenderer.on('iso-progress', (event, data) => callback(data)),
+    unmountISO: (drivePath) => ipcRenderer.invoke('unmount-iso', drivePath),
     onGamesUpdated: (callback) => ipcRenderer.on('games-updated', callback),
     // Real-Debrid
     rdAddMagnet: (magnetLink, apiKey) => ipcRenderer.invoke('rd-add-magnet', { magnetLink, apiKey }),
