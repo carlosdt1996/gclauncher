@@ -76,6 +76,8 @@ function App() {
   const [searchResults, setSearchResults] = useState([]);
   const [showDropdown, setShowDropdown] = useState(false); // Dropdown state
   const [torrentResults, setTorrentResults] = useState([]);
+  const [fitgirlResults, setFitgirlResults] = useState([]);
+  const [otherTorrentResults, setOtherTorrentResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [selectedSearchGame, setSelectedSearchGame] = useState(null);
   const [gameDetails, setGameDetails] = useState(null);
@@ -1760,6 +1762,8 @@ function App() {
 
     setSearchLoading(true);
     setTorrentResults([]); // Clear previous torrent results
+    setFitgirlResults([]);
+    setOtherTorrentResults([]);
     try {
       // Search SteamGridDB for game info
       const result = await window.electronAPI.searchGameSteamGrid(query);
@@ -1804,18 +1808,85 @@ function App() {
         minSeeders: 1
       });
       if (result.success) {
-        let results = result.data;
-        // Sort results
-        if (sortBy === 'seeders') {
-          results = results.sort((a, b) => b.seeders - a.seeders);
-        } else if (sortBy === 'size') {
-          results = results.sort((a, b) => {
-            const sizeA = parseSize(a.size);
-            const sizeB = parseSize(b.size);
-            return sizeB - sizeA;
-          });
+        // Handle new format with separated results
+        if (result.data.fitgirlResults !== undefined && result.data.otherResults !== undefined) {
+          // New format: separated results
+          // Results are already sorted by relevance from backend, but we can re-sort if user wants
+          let fitgirl = result.data.fitgirlResults || [];
+          let others = result.data.otherResults || [];
+          
+          // Sort FitGirl results (respect relevance score first, then user preference)
+          if (sortBy === 'seeders') {
+            fitgirl = fitgirl.sort((a, b) => {
+              // First by relevance score (if available), then by seeders
+              if (a.relevanceScore !== undefined && b.relevanceScore !== undefined) {
+                if (b.relevanceScore !== a.relevanceScore) {
+                  return b.relevanceScore - a.relevanceScore;
+                }
+              }
+              return (b.seeders || 0) - (a.seeders || 0);
+            });
+          } else if (sortBy === 'size') {
+            fitgirl = fitgirl.sort((a, b) => {
+              // First by relevance score (if available), then by size
+              if (a.relevanceScore !== undefined && b.relevanceScore !== undefined) {
+                if (b.relevanceScore !== a.relevanceScore) {
+                  return b.relevanceScore - a.relevanceScore;
+                }
+              }
+              const sizeA = parseSize(a.size);
+              const sizeB = parseSize(b.size);
+              return sizeB - sizeA;
+            });
+          }
+          // If sortBy is 'relevance' or undefined, keep original order (already sorted by backend)
+          
+          // Sort other results
+          if (sortBy === 'seeders') {
+            others = others.sort((a, b) => {
+              if (a.relevanceScore !== undefined && b.relevanceScore !== undefined) {
+                if (b.relevanceScore !== a.relevanceScore) {
+                  return b.relevanceScore - a.relevanceScore;
+                }
+              }
+              return (b.seeders || 0) - (a.seeders || 0);
+            });
+          } else if (sortBy === 'size') {
+            others = others.sort((a, b) => {
+              if (a.relevanceScore !== undefined && b.relevanceScore !== undefined) {
+                if (b.relevanceScore !== a.relevanceScore) {
+                  return b.relevanceScore - a.relevanceScore;
+                }
+              }
+              const sizeA = parseSize(a.size);
+              const sizeB = parseSize(b.size);
+              return sizeB - sizeA;
+            });
+          }
+          
+          setFitgirlResults(fitgirl);
+          setOtherTorrentResults(others);
+          // Keep old format for backward compatibility
+          setTorrentResults([...fitgirl, ...others]);
+        } else {
+          // Old format: single array (backward compatibility)
+          let results = result.data;
+          if (sortBy === 'seeders') {
+            results = results.sort((a, b) => b.seeders - a.seeders);
+          } else if (sortBy === 'size') {
+            results = results.sort((a, b) => {
+              const sizeA = parseSize(a.size);
+              const sizeB = parseSize(b.size);
+              return sizeB - sizeA;
+            });
+          }
+          // Separate FitGirl from others for old format too
+          const fitgirl = results.filter(r => r.source === 'FitGirl Site' || r.repacker === 'FitGirl');
+          const others = results.filter(r => r.source !== 'FitGirl Site' && r.repacker !== 'FitGirl');
+          setFitgirlResults(fitgirl);
+          setOtherTorrentResults(others);
+          setTorrentResults(results);
         }
-        setTorrentResults(results);
       }
     } catch (error) {
       console.error('[Torrent Search] Error:', error);
@@ -1830,6 +1901,16 @@ function App() {
     const unit = match[2].toUpperCase();
     const multipliers = { 'KB': 1024, 'MB': 1024 ** 2, 'GB': 1024 ** 3, 'TB': 1024 ** 4, 'KIB': 1024, 'MIB': 1024 ** 2, 'GIB': 1024 ** 3, 'TIB': 1024 ** 4 };
     return value * (multipliers[unit] || 1);
+  };
+
+  const handleCopyToClipboard = async (url) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      showToast('URL copied to clipboard!', 'success');
+    } catch (error) {
+      console.error('Error copying to clipboard:', error);
+      showToast('Failed to copy to clipboard', 'error');
+    }
   };
 
   const handleDownloadTorrent = async (torrent) => {
@@ -1908,6 +1989,8 @@ function App() {
   const gamesRef = useRef(games);
   const searchResultsRef = useRef(searchResults);
   const torrentResultsRef = useRef(torrentResults);
+  const fitgirlResultsRef = useRef(fitgirlResults);
+  const otherTorrentResultsRef = useRef(otherTorrentResults);
   const showGameDetailsRef = useRef(showGameDetails);
   const showCoverArtSelectorRef = useRef(showCoverArtSelector);
   const availableCoversRef = useRef(availableCovers);
@@ -1926,6 +2009,12 @@ function App() {
   useEffect(() => {
     torrentResultsRef.current = torrentResults;
   }, [torrentResults]);
+  useEffect(() => {
+    fitgirlResultsRef.current = fitgirlResults;
+  }, [fitgirlResults]);
+  useEffect(() => {
+    otherTorrentResultsRef.current = otherTorrentResults;
+  }, [otherTorrentResults]);
   useEffect(() => {
     showGameDetailsRef.current = showGameDetails;
   }, [showGameDetails]);
@@ -2123,7 +2212,7 @@ function App() {
           maxItems = searchResultsRef.current.length;
           selector = '.dropdown-item';
         } else {
-          maxItems = torrentResultsRef.current.length;
+          maxItems = fitgirlResultsRef.current.length + otherTorrentResultsRef.current.length;
           selector = 'tbody tr'; // Assuming torrent results are in a table
         }
       }
@@ -2405,6 +2494,8 @@ function App() {
             const game = searchResultsRef.current[index];
             setSelectedSearchGame(game);
             setTorrentResults([]);
+        setFitgirlResults([]);
+        setOtherTorrentResults([]);
             setShowDropdown(false);
             searchTorrentsForGame(game.name);
           }
@@ -2870,7 +2961,9 @@ function App() {
                         key={game.id}
                         onClick={() => {
                           setSelectedSearchGame(game);
-                          setTorrentResults([]); // Clear torrents initially
+                          setTorrentResults([]);
+        setFitgirlResults([]);
+        setOtherTorrentResults([]); // Clear torrents initially
                           setShowDropdown(false);
                           searchTorrentsForGame(game.name); // Auto-search when selected
                         }}
@@ -3043,32 +3136,45 @@ function App() {
               )}
 
               {/* Torrent Results */}
-              {!searchLoading && torrentResults.length > 0 && (
+              {!searchLoading && (fitgirlResults.length > 0 || otherTorrentResults.length > 0) && (
                 <div style={{
                   background: 'rgba(255, 255, 255, 0.03)',
                   borderRadius: '12px',
                   overflow: 'hidden'
                 }}>
-                  <table style={{
-                    width: '100%',
-                    borderCollapse: 'collapse'
-                  }}>
-                    <thead>
-                      <tr style={{
-                        background: 'rgba(255, 255, 255, 0.05)',
-                        borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
+                  {/* FitGirl Site Results */}
+                  {fitgirlResults.length > 0 && (
+                    <>
+                      <div style={{
+                        background: 'rgba(255, 105, 180, 0.15)',
+                        padding: '10px 15px',
+                        borderBottom: '2px solid rgba(255, 105, 180, 0.3)',
+                        fontWeight: 'bold',
+                        fontSize: '14px',
+                        color: '#ff69b4'
                       }}>
-                        <th style={{ padding: '15px', textAlign: 'left' }}>Name</th>
-                        <th style={{ padding: '15px', textAlign: 'left' }}>Repacker</th>
-                        <th style={{ padding: '15px', textAlign: 'center' }}>Size</th>
-                        <th style={{ padding: '15px', textAlign: 'center' }}>Seeders</th>
-                        <th style={{ padding: '15px', textAlign: 'center' }}>Leechers</th>
-                        <th style={{ padding: '15px', textAlign: 'center' }}>Source</th>
-                        <th style={{ padding: '15px', textAlign: 'center' }}>Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {torrentResults.map((torrent, index) => (
+                        FitGirl Repacks Site ({fitgirlResults.length})
+                      </div>
+                      <table style={{
+                        width: '100%',
+                        borderCollapse: 'collapse'
+                      }}>
+                        <thead>
+                          <tr style={{
+                            background: 'rgba(255, 255, 255, 0.05)',
+                            borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
+                          }}>
+                            <th style={{ padding: '15px', textAlign: 'left' }}>Name</th>
+                            <th style={{ padding: '15px', textAlign: 'left' }}>Repacker</th>
+                            <th style={{ padding: '15px', textAlign: 'center' }}>Size</th>
+                            <th style={{ padding: '15px', textAlign: 'center' }}>Seeders</th>
+                            <th style={{ padding: '15px', textAlign: 'center' }}>Leechers</th>
+                            <th style={{ padding: '15px', textAlign: 'center' }}>Source</th>
+                            <th style={{ padding: '15px', textAlign: 'center' }}>Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {fitgirlResults.map((torrent, index) => (
                         <tr
                           key={index}
                           style={{
@@ -3100,27 +3206,159 @@ function App() {
                             {torrent.source}
                           </td>
                           <td style={{ padding: '15px', textAlign: 'center' }}>
-                            <button
-                              onClick={() => handleDownloadTorrent(torrent)}
-                              className="btn-primary"
-                              style={{
-                                padding: '8px 16px',
-                                fontSize: '14px',
-                                background: (!torrent.magnetLink && torrent.ddlUrl) ? '#4a5568' : undefined
-                              }}
-                            >
-                              {(!torrent.magnetLink && torrent.ddlUrl) ? 'Open Link' : 'Download'}
-                            </button>
+                            <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                              {torrent.detailUrl && (
+                                <button
+                                  onClick={() => handleCopyToClipboard(torrent.detailUrl)}
+                                  className="btn-secondary"
+                                  style={{
+                                    padding: '8px 16px',
+                                    fontSize: '14px',
+                                    background: 'rgba(255, 255, 255, 0.1)',
+                                    border: '1px solid rgba(255, 255, 255, 0.2)'
+                                  }}
+                                  title="Copy page URL to clipboard"
+                                >
+                                  Clipboard
+                                </button>
+                              )}
+                              <button
+                                onClick={() => handleDownloadTorrent(torrent)}
+                                className="btn-primary"
+                                style={{
+                                  padding: '8px 16px',
+                                  fontSize: '14px',
+                                  background: (!torrent.magnetLink && torrent.ddlUrl) ? '#4a5568' : undefined
+                                }}
+                              >
+                                {(!torrent.magnetLink && torrent.ddlUrl) ? 'Open Link' : 'Download'}
+                              </button>
+                            </div>
                           </td>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                          ))}
+                        </tbody>
+                      </table>
+                      
+                      {/* Separator - More visible */}
+                      {otherTorrentResults.length > 0 && (
+                        <div style={{
+                          height: '3px',
+                          background: 'linear-gradient(90deg, rgba(255, 105, 180, 0.2), rgba(100, 200, 255, 0.2))',
+                          margin: '25px 15px',
+                          borderRadius: '2px',
+                          borderTop: '1px solid rgba(255, 255, 255, 0.15)',
+                          borderBottom: '1px solid rgba(255, 255, 255, 0.15)',
+                          boxShadow: '0 2px 4px rgba(0, 0, 0, 0.2)'
+                        }}></div>
+                      )}
+                    </>
+                  )}
+                  
+                  {/* Other Results */}
+                  {otherTorrentResults.length > 0 && (
+                    <>
+                      <div style={{
+                        background: 'rgba(100, 200, 255, 0.15)',
+                        padding: '10px 15px',
+                        borderBottom: '2px solid rgba(100, 200, 255, 0.3)',
+                        fontWeight: 'bold',
+                        fontSize: '14px',
+                        color: '#64c8ff'
+                      }}>
+                        Other Sources ({otherTorrentResults.length})
+                      </div>
+                      <table style={{
+                        width: '100%',
+                        borderCollapse: 'collapse'
+                      }}>
+                        <thead>
+                          <tr style={{
+                            background: 'rgba(255, 255, 255, 0.05)',
+                            borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
+                          }}>
+                            <th style={{ padding: '15px', textAlign: 'left' }}>Name</th>
+                            <th style={{ padding: '15px', textAlign: 'left' }}>Repacker</th>
+                            <th style={{ padding: '15px', textAlign: 'center' }}>Size</th>
+                            <th style={{ padding: '15px', textAlign: 'center' }}>Seeders</th>
+                            <th style={{ padding: '15px', textAlign: 'center' }}>Leechers</th>
+                            <th style={{ padding: '15px', textAlign: 'center' }}>Source</th>
+                            <th style={{ padding: '15px', textAlign: 'center' }}>Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {otherTorrentResults.map((torrent, index) => (
+                            <tr
+                              key={`other-${index}`}
+                              style={{
+                                borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
+                                transition: 'background 0.2s ease'
+                              }}
+                              onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'}
+                              onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                            >
+                              <td style={{ padding: '15px', maxWidth: '400px' }}>
+                                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {torrent.name}
+                                </div>
+                              </td>
+                              <td style={{ padding: '15px' }}>
+                                <span style={{
+                                  padding: '4px 8px',
+                                  borderRadius: '4px',
+                                  background: torrent.repacker === 'FitGirl' ? 'rgba(255, 105, 180, 0.2)' : 'rgba(100, 200, 255, 0.2)',
+                                  fontSize: '12px'
+                                }}>
+                                  {torrent.repacker}
+                                </span>
+                              </td>
+                              <td style={{ padding: '15px', textAlign: 'center' }}>{torrent.size}</td>
+                              <td style={{ padding: '15px', textAlign: 'center', color: '#4ade80' }}>{torrent.seeders}</td>
+                              <td style={{ padding: '15px', textAlign: 'center', color: '#f87171' }}>{torrent.leechers}</td>
+                              <td style={{ padding: '15px', textAlign: 'center', fontSize: '12px', color: 'rgba(255, 255, 255, 0.6)' }}>
+                                {torrent.source}
+                              </td>
+                              <td style={{ padding: '15px', textAlign: 'center' }}>
+                                <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                                  {torrent.detailUrl && (
+                                    <button
+                                      onClick={() => handleCopyToClipboard(torrent.detailUrl)}
+                                      className="btn-secondary"
+                                      style={{
+                                        padding: '8px 16px',
+                                        fontSize: '14px',
+                                        background: 'rgba(255, 255, 255, 0.1)',
+                                        border: '1px solid rgba(255, 255, 255, 0.2)'
+                                      }}
+                                      title="Copy page URL to clipboard"
+                                    >
+                                      Clipboard
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => handleDownloadTorrent(torrent)}
+                                    className="btn-primary"
+                                    style={{
+                                      padding: '8px 16px',
+                                      fontSize: '14px',
+                                      background: (!torrent.magnetLink && torrent.ddlUrl) ? '#4a5568' : undefined
+                                    }}
+                                  >
+                                    {(!torrent.magnetLink && torrent.ddlUrl) ? 'Open Link' : 'Download'}
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </>
+                  )}
                 </div>
               )}
 
               {/* No Results */}
-              {!searchLoading && searchQuery && torrentResults.length === 0 && selectedSearchGame && (
+              {!searchLoading && searchQuery && fitgirlResults.length === 0 && otherTorrentResults.length === 0 && selectedSearchGame && (
                 <div className="no-games">
                   No torrents found for "{selectedSearchGame.name}". Try searching for a different game or check your filter settings.
                 </div>
