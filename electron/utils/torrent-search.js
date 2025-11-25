@@ -236,7 +236,7 @@ function gameNameToFitGirlUrl(gameName) {
 }
 
 // Direct FitGirl Site Search (fitgirl-repacks.site)
-async function searchFitGirlSite(query, targetGameName = null, sequelNumber = null, targetSubtitle = null) {
+async function searchFitGirlSite(query, targetGameName = null) {
     const BASE_URL = 'https://fitgirl-repacks.site';
 
     try {
@@ -504,14 +504,6 @@ async function searchFitGirlSite(query, targetGameName = null, sequelNumber = nu
         }
 
         // FALLBACK: Normal search if direct URL doesn't work
-        if (sequelNumber !== null) {
-            console.log(`[FitGirl Site] Looking specifically for sequel #${sequelNumber}`);
-        }
-        if (targetSubtitle) {
-            const targetParts = extractGameParts(targetSubtitle);
-            console.log(`[FitGirl Site] Target has subtitle: "${targetParts.subtitle}"`);
-        }
-
         const searchUrl = `${BASE_URL}/search/${query.replace(/\s+/g, '+')}`;
         console.log(`[FitGirl Site] Search URL: ${searchUrl}`);
 
@@ -561,7 +553,7 @@ async function searchFitGirlSite(query, targetGameName = null, sequelNumber = nu
         console.log(`[FitGirl Site] Found ${candidates.length} candidates`);
 
         // Process candidates
-        return await processFitGirlCandidates(candidates, targetGameName || query, null, targetSubtitle);
+        return await processFitGirlCandidates(candidates, targetGameName || query, null);
     } catch (error) {
         console.error('[FitGirl Site] Search error:', error);
         return [];
@@ -569,7 +561,7 @@ async function searchFitGirlSite(query, targetGameName = null, sequelNumber = nu
 }
 
 // Helper function to process FitGirl candidates and return result
-async function processFitGirlCandidates(candidates, comparisonName, directPageUrl = null, targetSubtitle = null) {
+async function processFitGirlCandidates(candidates, comparisonName, directPageUrl = null) {
     // Don't filter here - will filter at the end with scoring penalty
     let filteredCandidates = candidates;
 
@@ -1162,7 +1154,7 @@ function calculateRelevanceScore(query, title) {
 }
 
 // Filter and rank results by relevance
-function filterAndRankResults(results, query, minScore = 30, sequelNumber = null, targetSubtitle = null) {
+function filterAndRankResults(results, query, minScore = 30) {
     // Calculate score for each result
     const scoredResults = results.map(result => {
         // If result already has a very high relevance score (from direct URL match),
@@ -1174,27 +1166,6 @@ function filterAndRankResults(results, query, minScore = 30, sequelNumber = null
 
         let relevanceScore = calculateRelevanceScore(query, result.name);
 
-        // Apply SEVERE penalty for subtitle mismatch
-        const resultParts = extractGameParts(result.name);
-
-        // If looking for original game (no subtitle), heavily penalize results with subtitles
-        if (targetSubtitle !== null) {
-            const targetParts = extractGameParts(targetSubtitle);
-            if (!targetParts.hasSubtitle && resultParts.hasSubtitle) {
-                // Looking for original but result has subtitle - SEVERE penalty
-                relevanceScore *= 0.1; // Reduce to 10% of original score
-                console.log(`[Relevance] Heavy penalty for "${result.name}" - has subtitle but looking for original`);
-            } else if (targetParts.hasSubtitle && !resultParts.hasSubtitle) {
-                // Looking for sequel but result is original - moderate penalty
-                relevanceScore *= 0.3;
-            }
-        } else if (sequelNumber === null || sequelNumber === 1) {
-            // No sequel specified or looking for part 1 - penalize results with subtitles
-            if (resultParts.hasSubtitle) {
-                relevanceScore *= 0.1; // Reduce to 10% of original score
-                console.log(`[Relevance] Heavy penalty for "${result.name}" - has subtitle but looking for original`);
-            }
-        }
 
         return {
             ...result,
@@ -1221,99 +1192,6 @@ function filterAndRankResults(results, query, minScore = 30, sequelNumber = null
     return filtered;
 }
 
-// Helper to extract sequel numbers from game name (e.g., "Red Dead Redemption 2" -> 2)
-function extractSequelNumber(gameName) {
-    // Try to find sequel numbers in various patterns
-    // Pattern order matters - try most common patterns first
-
-    // Pattern 1: Number followed by colon (e.g., "Game 2: Ultimate Edition")
-    let match = gameName.match(/\s+(\d+)\s*:/);
-    if (match && match[1]) {
-        const num = parseInt(match[1]);
-        if (!isNaN(num) && num > 0 && num <= 20) {
-            return num;
-        }
-    }
-
-    // Pattern 2: Number followed by dash/em dash (e.g., "Game 2 – Edition")
-    match = gameName.match(/\s+(\d+)\s*[–-]/);
-    if (match && match[1]) {
-        const num = parseInt(match[1]);
-        if (!isNaN(num) && num > 0 && num <= 20) {
-            return num;
-        }
-    }
-
-    // Pattern 3: Number at the end (e.g., "Game 2")
-    match = gameName.match(/\s+(\d+)$/);
-    if (match && match[1]) {
-        const num = parseInt(match[1]);
-        if (!isNaN(num) && num > 0 && num <= 20) {
-            return num;
-        }
-    }
-
-    // Pattern 4: Number followed by space and word (e.g., "Game 2 Ultimate")
-    match = gameName.match(/\s+(\d+)\s+[A-Za-z]/);
-    if (match && match[1]) {
-        const num = parseInt(match[1]);
-        if (!isNaN(num) && num > 0 && num <= 20) {
-            return num;
-        }
-    }
-
-    // Pattern 5: Roman numerals - try longer matches first to avoid false positives
-    // Order is important: longer numerals first (e.g., "VIII" before "V" before "I")
-    const romanMap = {
-        'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5,
-        'VI': 6, 'VII': 7, 'VIII': 8, 'IX': 9, 'X': 10,
-        'XI': 11, 'XII': 12, 'XIII': 13, 'XIV': 14, 'XV': 15
-    };
-
-    // Try longer roman numerals first (to avoid matching "I" when it's part of "IV", "VI", etc.)
-    const romanOrder = ['VIII', 'VII', 'III', 'IV', 'VI', 'IX', 'II', 'X', 'V', 'I'];
-
-    // Check all positions in the game name for roman numerals
-    for (const roman of romanOrder) {
-        const upper = roman.toUpperCase();
-        if (!romanMap[upper]) continue;
-
-        // Pattern 1: Roman numeral followed by colon
-        match = gameName.match(new RegExp(`\\s+${roman}\\s*:`, 'i'));
-        if (match) {
-            return romanMap[upper];
-        }
-
-        // Pattern 2: Roman numeral followed by dash/em dash (e.g., "Game V –")
-        match = gameName.match(new RegExp(`\\s+${roman}\\s*[–-]`, 'i'));
-        if (match) {
-            return romanMap[upper];
-        }
-
-        // Pattern 3: Roman numeral at the end
-        match = gameName.match(new RegExp(`\\s+${roman}$`, 'i'));
-        if (match) {
-            // Additional check for 'I' to avoid false positives
-            if (upper === 'I') {
-                const beforeMatch = gameName.substring(0, match.index).trim();
-                // Make sure 'I' is not part of another word
-                if (beforeMatch.endsWith(' ') || beforeMatch.length === 0) {
-                    return romanMap[upper];
-                }
-            } else {
-                return romanMap[upper];
-            }
-        }
-
-        // Pattern 4: Roman numeral followed by space and non-roman letter/number (e.g., "Game V v1.0")
-        match = gameName.match(new RegExp(`\\s+${roman}(?:\\s+[^IVXa-z]|\\s+$)`, 'i'));
-        if (match) {
-            return romanMap[upper];
-        }
-    }
-
-    return null; // No sequel number found
-}
 
 // Helper to extract base game name and subtitle/sequel identifier
 function extractGameParts(gameName) {
@@ -1445,189 +1323,7 @@ function extractGameParts(gameName) {
     };
 }
 
-// Helper to check if a title matches the specific sequel (by number or subtitle)
-function matchesSequel(title, sequelNumber, targetSubtitle = null) {
-    // Remove repacker names from title before extracting parts to avoid false subtitle detection
-    // Get repackers from store (dynamic list)
-    const storedRepackers = store.get('repackers') || ['fitgirl', 'elamigos', 'rune', 'empress', 'tenoke', 'dodi'];
-    // Create variations for each repacker (with spaces, hyphens, etc.)
-    const repackerNames = [];
-    storedRepackers.forEach(repacker => {
-        repackerNames.push(repacker);
-        // Add variations
-        if (repacker.includes(' ')) {
-            repackerNames.push(repacker.replace(/\s+/g, '-'));
-            repackerNames.push(repacker.replace(/\s+/g, ''));
-        }
-        if (repacker.includes('-')) {
-            repackerNames.push(repacker.replace(/-/g, ' '));
-            repackerNames.push(repacker.replace(/-/g, ''));
-        }
-        // Add "el amigos" -> "elamigos" variations
-        if (repacker === 'elamigos') {
-            repackerNames.push('el amigos', 'el-amigos');
-        }
-        if (repacker === 'el amigos' || repacker === 'el-amigos') {
-            repackerNames.push('elamigos');
-        }
-        // Add "fitgirl" variations
-        if (repacker === 'fitgirl') {
-            repackerNames.push('fit girl', 'fit-girl');
-        }
-        if (repacker === 'fit girl' || repacker === 'fit-girl') {
-            repackerNames.push('fitgirl');
-        }
-    });
-    // Remove duplicates
-    const uniqueRepackerNames = [...new Set(repackerNames)];
-    
-    let cleanedTitle = title;
-    for (const repacker of uniqueRepackerNames) {
-        // Remove repacker names at the end (case-insensitive, with various separators)
-        const repackerRegex = new RegExp(`[\\s\\-–.]${repacker}(?:[\\s\\-–.]|$)`, 'gi');
-        cleanedTitle = cleanedTitle.replace(repackerRegex, '').trim();
-        // Also try at the very end without separator
-        if (cleanedTitle.toLowerCase().endsWith(repacker.toLowerCase())) {
-            cleanedTitle = cleanedTitle.substring(0, cleanedTitle.length - repacker.length).trim();
-        }
-    }
-    
-    const titleParts = extractGameParts(cleanedTitle);
-    const titleSequelNum = extractSequelNumber(cleanedTitle);
-
-    // If we have a target subtitle from SteamGridDB, use it for matching
-    if (targetSubtitle) {
-        const targetParts = extractGameParts(targetSubtitle);
-
-        // If target has a subtitle, we're looking for a specific sequel
-        if (targetParts.hasSubtitle) {
-            // Result must also have a subtitle (reject original game)
-            if (!titleParts.hasSubtitle) {
-                // Target has subtitle but result doesn't - likely the original game, reject
-                console.log(`[Sequel Match] Rejecting "${title}" - target has subtitle "${targetParts.subtitle}" but result doesn't`);
-                return false;
-            }
-
-            // Both have subtitles - check if they match
-            const targetSubtitleLower = targetParts.subtitle.toLowerCase().trim();
-            const titleSubtitleLower = titleParts.subtitle.toLowerCase().trim();
-
-            // Normalize subtitles (remove common words that might differ)
-            const normalizeSubtitle = (sub) => {
-                return sub
-                    .replace(/\s*edition\s*/gi, '')
-                    .replace(/\s*deluxe\s*/gi, '')
-                    .replace(/\s*ultimate\s*/gi, '')
-                    .replace(/\s*definitive\s*/gi, '')
-                    .replace(/\s*collector.*?\s*/gi, '')
-                    .replace(/\s*digital\s*/gi, '')
-                    .replace(/\s+/g, ' ')
-                    .trim();
-            };
-
-            const normalizedTarget = normalizeSubtitle(targetSubtitleLower);
-            const normalizedTitle = normalizeSubtitle(titleSubtitleLower);
-
-            // Check if subtitles match (exact or contains)
-            if (normalizedTarget === normalizedTitle ||
-                normalizedTarget.includes(normalizedTitle) ||
-                normalizedTitle.includes(normalizedTarget)) {
-                console.log(`[Sequel Match] Accepting "${title}" - subtitle matches "${targetParts.subtitle}"`);
-                return true;
-            }
-
-            // Subtitles don't match - different sequel
-            console.log(`[Sequel Match] Rejecting "${title}" - subtitle "${titleParts.subtitle}" doesn't match "${targetParts.subtitle}"`);
-            return false;
-        } else {
-            // Target has no subtitle (looking for original game)
-            // REJECT results that have subtitles (they are sequels, not the original)
-            if (titleParts.hasSubtitle) {
-                console.log(`[Sequel Match] Rejecting "${title}" - looking for original game but result has subtitle "${titleParts.subtitle}"`);
-                return false;
-            }
-            // Both have no subtitle - likely the original game
-            console.log(`[Sequel Match] Accepting "${title}" - both are original games (no subtitles)`);
-            return true;
-        }
-    }
-
-    // If no targetSubtitle but we're looking for original game (no sequel number or sequel number is 1)
-    // Reject results with subtitles as they are sequels
-    if ((sequelNumber === null || sequelNumber === 1) && titleParts.hasSubtitle) {
-        console.log(`[Sequel Match] Rejecting "${title}" - looking for original game (no subtitle) but result has subtitle "${titleParts.subtitle}"`);
-        return false;
-    }
-
-    // Fallback to number-based matching if no subtitle
-    // If no sequel number and no targetSubtitle, we're looking for the original game
-    // Reject results with subtitles (they are sequels)
-    if (sequelNumber === null || sequelNumber === undefined) {
-        if (titleParts.hasSubtitle) {
-            console.log(`[Sequel Match] Rejecting "${title}" - looking for original game but result has subtitle "${titleParts.subtitle}"`);
-            return false;
-        }
-        console.log(`[Sequel Match] No sequel specified, accepting "${title}" (no subtitle)`);
-        return true; // No sequel specified and no subtitle = original game
-    }
-
-    // If we're looking for a specific sequel number
-    console.log(`[Sequel Match] Comparing sequel numbers: target=${sequelNumber}, title="${title}" has=${titleSequelNum}`);
-
-    if (sequelNumber > 1) {
-        // If no sequel number in title, reject it (likely part 1 or unrelated)
-        if (titleSequelNum === null || titleSequelNum === undefined) {
-            console.log(`[Sequel Match] Rejecting "${title}" - looking for sequel ${sequelNumber} but title has no number`);
-            return false;
-        }
-        // Must match exactly
-        if (titleSequelNum === sequelNumber) {
-            console.log(`[Sequel Match] Accepting "${title}" - sequel numbers match: ${sequelNumber}`);
-            return true;
-        } else {
-            console.log(`[Sequel Match] Rejecting "${title}" - sequel number ${titleSequelNum} doesn't match ${sequelNumber}`);
-            return false;
-        }
-    } else if (sequelNumber === 1) {
-        // Looking for part 1 - accept if no number (likely part 1) or if number is 1
-        if (!titleSequelNum) {
-            console.log(`[Sequel Match] Accepting "${title}" - no number = likely part 1`);
-            return true; // No number = likely part 1
-        }
-        const matches = titleSequelNum === 1;
-        console.log(`[Sequel Match] ${matches ? 'Accepting' : 'Rejecting'} "${title}" - sequel number is ${titleSequelNum}`);
-        return matches;
-    }
-
-    // Fallback: exact match required
-    const matches = titleSequelNum === sequelNumber;
-    console.log(`[Sequel Match] ${matches ? 'Accepting' : 'Rejecting'} "${title}" - sequel numbers ${titleSequelNum} vs ${sequelNumber}`);
-    return matches;
-}
-
-// Helper to check if a title matches the specific sequel number
-function matchesSequelNumber(title, sequelNumber) {
-    if (sequelNumber === null || sequelNumber === undefined) return true; // No sequel specified, accept all
-
-    const titleSequel = extractSequelNumber(title);
-
-    // If we're looking for a specific sequel number
-    if (sequelNumber > 1) {
-        // If no sequel number in title, reject it (likely part 1 or unrelated)
-        if (!titleSequel) {
-            return false;
-        }
-        // Must match exactly
-        return titleSequel === sequelNumber;
-    } else if (sequelNumber === 1) {
-        // Looking for part 1 - accept if no number (likely part 1) or if number is 1
-        if (!titleSequel) return true; // No number = likely part 1
-        return titleSequel === 1;
-    }
-
-    // Fallback: exact match required
-    return titleSequel === sequelNumber;
-}
+// REMOVED: Sequel matching logic - functions completely removed
 
 // Helper to convert Roman numerals to Arabic
 function convertRomanToArabic(text) {
@@ -1694,8 +1390,6 @@ export async function searchTorrents(gameName, options = {}) {
     // Start SteamGridDB check in parallel with initial search setup
     // We'll wait for it only when we need it (before final filtering)
     let targetGameName = null;
-    let sequelNumber = null;
-    let targetSubtitle = null;
 
     const steamGridPromise = (async () => {
         try {
@@ -1707,23 +1401,7 @@ export async function searchTorrents(gameName, options = {}) {
                     // Use the first (best) match from SteamGridDB
                     const name = steamGridResults[0].name;
                     console.log(`[TorrentSearch] Found SteamGridDB match: "${name}"`);
-
-                    // Extract game parts to check for subtitle
-                    const gameParts = extractGameParts(name);
-                    let subtitle = null;
-                    let seqNum = null;
-
-                    if (gameParts.hasSubtitle) {
-                        subtitle = name; // Pass full name for subtitle matching
-                        console.log(`[TorrentSearch] Detected subtitle sequel: "${gameParts.subtitle}"`);
-                    } else {
-                        seqNum = extractSequelNumber(name);
-                        if (seqNum !== null) {
-                            console.log(`[TorrentSearch] Detected sequel number: ${seqNum}`);
-                        }
-                    }
-
-                    return { name, subtitle, sequelNumber: seqNum };
+                    return { name };
                 }
             }
         } catch (error) {
@@ -1736,8 +1414,6 @@ export async function searchTorrents(gameName, options = {}) {
     const steamGridResult = await steamGridPromise;
     if (steamGridResult) {
         targetGameName = steamGridResult.name;
-        targetSubtitle = steamGridResult.subtitle;
-        sequelNumber = steamGridResult.sequelNumber;
     }
 
     // Use SteamGridDB name if available, otherwise use original
@@ -1749,7 +1425,7 @@ export async function searchTorrents(gameName, options = {}) {
     const seenMagnets = new Set();
 
     // Helper to perform search for a single query on a single site
-    const searchSite = async (query, site, targetGameName = null, sequelNumber = null, targetSubtitle = null) => {
+    const searchSite = async (query, site, targetGameName = null) => {
         try {
             console.log(`[TorrentSearch] Searching ${site.name} for "${query}"...`);
             let results = [];
@@ -1757,7 +1433,7 @@ export async function searchTorrents(gameName, options = {}) {
                 // Custom search function (for direct sites like FitGirl)
                 // Check if it's FitGirl Site and pass additional parameters
                 if (site.name === 'FitGirl Site') {
-                    results = await site.search(query, targetGameName, sequelNumber, targetSubtitle);
+                    results = await site.search(query, targetGameName);
                 } else {
                     results = await site.search(query);
                 }
@@ -1790,7 +1466,7 @@ export async function searchTorrents(gameName, options = {}) {
         if (fitgirlSite) {
             for (const query of searchQueries) {
                 searchPromises.push(
-                    searchSite(query, fitgirlSite, targetGameName, sequelNumber, targetSubtitle)
+                    searchSite(query, fitgirlSite, targetGameName)
                         .catch(err => {
                             console.warn(`[TorrentSearch] FitGirl Site search failed for "${query}":`, err.message);
                             return { siteName: 'FitGirl Site', results: [] };
@@ -1976,7 +1652,7 @@ export async function searchTorrents(gameName, options = {}) {
 
     // Apply relevance filtering ONLY to non-trusted results
     const originalQuery = queries[0];
-    let filteredOtherResults = filterAndRankResults(otherResults, originalQuery, 40, sequelNumber, targetSubtitle);
+    let filteredOtherResults = filterAndRankResults(otherResults, originalQuery, 40);
 
     // Now filter by minimum seeders for other results
     filteredOtherResults = filteredOtherResults.filter(r => {
@@ -1988,20 +1664,6 @@ export async function searchTorrents(gameName, options = {}) {
         return r.seeders >= minSeeders;
     });
 
-    // FINAL FILTER: Apply strict sequel/subtitle filtering ONLY to non-trusted results
-    if ((sequelNumber !== null || targetSubtitle !== null) && filteredOtherResults.length > 0) {
-        const beforeCount = filteredOtherResults.length;
-        filteredOtherResults = filteredOtherResults.filter(result => {
-            const matches = matchesSequel(result.name, sequelNumber, targetSubtitle);
-            if (!matches) {
-                console.log(`[TorrentSearch] FINAL FILTER - Rejecting "${result.name}" (wrong sequel/subtitle)`);
-            }
-            return matches;
-        });
-        if (beforeCount !== filteredOtherResults.length) {
-            console.log(`[TorrentSearch] FINAL sequel/subtitle filter: ${beforeCount} -> ${filteredOtherResults.length} results`);
-        }
-    }
 
     // Combine trusted results (no filtering) with filtered other results
     const allFilteredResults = [...trustedResults, ...filteredOtherResults];
