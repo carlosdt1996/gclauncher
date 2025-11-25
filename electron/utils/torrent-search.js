@@ -205,6 +205,7 @@ async function searchFitGirlSite(query, targetGameName = null, sequelNumber = nu
             const directUrl = `${BASE_URL}/${directUrlPath}/`;
             console.log(`[FitGirl Site] Trying direct URL first: ${directUrl}`);
 
+            let directResult = null;
             try {
                 const directHtml = await scrapeWithWindow(directUrl);
                 const $direct = load(directHtml);
@@ -322,10 +323,7 @@ async function searchFitGirlSite(query, targetGameName = null, sequelNumber = nu
                         console.log(`[FitGirl Site] This might be normal - FitGirl may link to external torrent sites`);
                     }
 
-                    if (!magnetLink) {
-                        console.log(`[FitGirl Site] No magnet link found on direct page, trying search...`);
-                        // Fall through to search if no magnet found
-                    } else {
+                    if (magnetLink) {
                         // Clean title for display
                         const displayTitle = pageTitle
                             .replace(/\s*–\s*FitGirl Repack/i, '')
@@ -337,7 +335,7 @@ async function searchFitGirlSite(query, targetGameName = null, sequelNumber = nu
                             .trim();
 
                         console.log(`[FitGirl Site] ✅ Returning direct match: "${displayTitle}" (${size}, Seeds: ${seeders}, Peers: ${leechers})`);
-                        return [{
+                        directResult = [{
                             name: displayTitle,
                             detailUrl: directUrl,
                             magnetLink: magnetLink,
@@ -351,10 +349,111 @@ async function searchFitGirlSite(query, targetGameName = null, sequelNumber = nu
                         }];
                     }
                 } else {
-                    console.log(`[FitGirl Site] Direct URL exists but doesn't seem to be a valid game page, trying search...`);
+                    console.log(`[FitGirl Site] Direct URL exists but doesn't seem to be a valid game page, trying alternative...`);
                 }
             } catch (directError) {
-                console.log(`[FitGirl Site] Direct URL failed (404 or error), trying search...`);
+                console.log(`[FitGirl Site] Direct URL failed (404 or error), trying alternative...`);
+            }
+
+            // If direct URL didn't work, try with alternative number format (romano <-> arábigo)
+            if (!directResult) {
+                const altGameName = convertRomanToArabic(targetGameName) || convertArabicToRoman(targetGameName);
+                if (altGameName && altGameName !== targetGameName) {
+                    console.log(`[FitGirl Site] Trying alternative number format: "${targetGameName}" -> "${altGameName}"`);
+                    const altDirectUrlPath = gameNameToFitGirlUrl(altGameName);
+                    const altDirectUrl = `${BASE_URL}/${altDirectUrlPath}/`;
+                    console.log(`[FitGirl Site] Trying alternative direct URL: ${altDirectUrl}`);
+
+                    try {
+                        const altDirectHtml = await scrapeWithWindow(altDirectUrl);
+                        const $altDirect = load(altDirectHtml);
+
+                        let altPageTitle = '';
+                        altPageTitle = $altDirect('article.post h1.entry-title').first().text().trim();
+                        if (!altPageTitle || altPageTitle === 'FitGirl Repacks') {
+                            altPageTitle = $altDirect('article h1').first().text().trim();
+                        }
+                        if (!altPageTitle || altPageTitle === 'FitGirl Repacks') {
+                            altPageTitle = $altDirect('article.post').find('h1').first().text().trim();
+                        }
+                        if (!altPageTitle || altPageTitle === 'FitGirl Repacks') {
+                            const metaTitle = $altDirect('meta[property="og:title"]').attr('content');
+                            if (metaTitle && metaTitle !== 'FitGirl Repacks') {
+                                altPageTitle = metaTitle;
+                            } else {
+                                altPageTitle = altGameName;
+                            }
+                        }
+
+                        const altHasValidContent = $altDirect('article.post').length > 0 ||
+                            altPageTitle.toLowerCase().includes(altGameName.toLowerCase().split(':')[0].trim()) ||
+                            $altDirect('.entry-content').length > 0;
+
+                        if (altHasValidContent && altPageTitle) {
+                            console.log(`[FitGirl Site] ✅ Alternative direct URL match found! Page title: "${altPageTitle}"`);
+                            const $altArticle = $altDirect('article.post').first() || $altDirect('body');
+
+                            const image = $altArticle.find('img').first().attr('src') || '';
+                            const content = $altArticle.find('.entry-content').text();
+                            const sizeMatch = content.match(/Repack Size[:\s]+([0-9.]+\s*[GM]B)/i);
+                            let size = sizeMatch ? sizeMatch[1] : 'Unknown';
+
+                            let magnetLink = null;
+                            let seeders = 100;
+                            let leechers = 0;
+
+                            magnetLink = $altArticle.find('a[href^="magnet:"]').first().attr('href');
+                            if (!magnetLink) {
+                                magnetLink = $altArticle.find('.entry-content a[href^="magnet:"]').first().attr('href');
+                            }
+                            if (!magnetLink) {
+                                $altDirect('a[href^="magnet:"]').each((i, elem) => {
+                                    if (!magnetLink) {
+                                        magnetLink = $altDirect(elem).attr('href');
+                                    }
+                                });
+                            }
+                            if (!magnetLink) {
+                                const magnetMatch = altDirectHtml.match(/magnet:\?xt=urn:btih:[a-zA-Z0-9]+[^\s"'<>]*/i);
+                                if (magnetMatch) {
+                                    magnetLink = magnetMatch[0];
+                                }
+                            }
+
+                            if (magnetLink) {
+                                const displayTitle = altPageTitle
+                                    .replace(/\s*–\s*FitGirl Repack/i, '')
+                                    .replace(/\s*-\s*FitGirl Repack/i, '')
+                                    .replace(/\s*\(.*?Repack.*?\)/i, '')
+                                    .replace(/\s*\[.*?Repack.*?\]/i, '')
+                                    .replace(/\s*Repack\s*$/i, '')
+                                    .replace(/\s+/g, ' ')
+                                    .trim();
+
+                                console.log(`[FitGirl Site] ✅ Returning alternative direct match: "${displayTitle}"`);
+                                directResult = [{
+                                    name: displayTitle,
+                                    detailUrl: altDirectUrl,
+                                    magnetLink: magnetLink,
+                                    seeders: seeders,
+                                    leechers: leechers,
+                                    size,
+                                    source: 'FitGirl Site',
+                                    repacker: 'FitGirl',
+                                    imageUrl: image,
+                                    relevanceScore: 150
+                                }];
+                            }
+                        }
+                    } catch (altDirectError) {
+                        console.log(`[FitGirl Site] Alternative direct URL also failed, trying search...`);
+                    }
+                }
+            }
+
+            // If we got a result from direct URL (original or alternative), return it
+            if (directResult) {
+                return directResult;
             }
         }
 
@@ -563,118 +662,184 @@ async function processFitGirlCandidates(candidates, comparisonName, directPageUr
     return [result]; // Return as array with single result
 }
 
-// Direct ElAmigos Search
-async function searchElAmigos(query) {
-    // Try elamigos.site
-    const searchUrl = `https://elamigos.site/?s=${encodeURIComponent(query)}`;
+// Direct ElAmigos Search - focused on keeplinks
+async function searchElAmigos(query, targetGameName = null) {
+    const BASE_URL = 'https://elamigos.site';
+    
     try {
-        const html = await scrapeWithWindow(searchUrl);
-        const $ = load(html);
+        console.log(`[ElAmigos] Searching for "${query}"...`);
+        
+        // Scrape the main page directly (no search query parameter)
+        console.log(`[ElAmigos] Scraping main page: ${BASE_URL}`);
+        const mainPageHtml = await scrapeWithWindow(BASE_URL);
+        const $main = load(mainPageHtml);
         const candidates = [];
-
-        // Parse search results (assuming standard WP structure or similar)
-        $('article, .post').each((i, elem) => {
-            if (candidates.length >= 3) return false;
-            const $article = $(elem);
-            const titleLink = $article.find('h2 a, h1 a, .entry-title a').first();
-            const title = titleLink.text().trim();
-            const url = titleLink.attr('href');
-
+        
+        // Look for h3 elements on main page that contain the search text
+        const searchTextLower = query.toLowerCase();
+        const targetGameNameLower = targetGameName ? targetGameName.toLowerCase() : null;
+        const comparisonText = targetGameNameLower || searchTextLower;
+        const comparisonWords = comparisonText.split(/\s+/).filter(w => w.length > 2); // Filter out short words
+        
+        $main('h3').each((i, elem) => {
+            if (candidates.length >= 50) return false; // Check more candidates
+            const $h3 = $main(elem);
+            
+            const title = $h3.text().trim();
+            const titleLower = title.toLowerCase();
+            
+            // STRICT: Title must contain all important words from search
+            const allWordsMatch = comparisonWords.every(word => titleLower.includes(word));
+            
+            if (!allWordsMatch) {
+                return; // Skip this candidate
+            }
+            
+            // Find the link - could be in h3 itself or in parent/article
+            let url = $h3.find('a').first().attr('href');
+            if (!url) {
+                // Try parent elements
+                const $parent = $h3.parent();
+                url = $parent.find('a').first().attr('href');
+                if (!url && $parent.is('a')) {
+                    url = $parent.attr('href');
+                }
+            }
+            
             if (title && url) {
-                candidates.push({ title, url });
+                // Make URL absolute if needed
+                if (!url.startsWith('http')) {
+                    url = url.startsWith('/') ? `${BASE_URL}${url}` : `${BASE_URL}/${url}`;
+                }
+                
+                // Clean title
+                const cleanTitle = title
+                    .replace(/\s*–\s*ElAmigos/i, '')
+                    .replace(/\s*-\s*ElAmigos/i, '')
+                    .replace(/\s*\(.*?ElAmigos.*?\)/i, '')
+                    .replace(/\s*\[.*?ElAmigos.*?\]/i, '')
+                    .replace(/\s*,\s*[\d.]+\s*[GM]B.*$/i, '') // Remove size from title
+                    .replace(/\s+/g, ' ')
+                    .trim();
+                
+                // Only add if it looks like a game page link (not category, tag, etc.)
+                if (url.includes('/game/') || url.includes('/post/') || url.includes('/entry/') || 
+                    (!url.includes('/category/') && !url.includes('/tag/') && !url.includes('/author/'))) {
+                    candidates.push({ 
+                        originalTitle: title,
+                        cleanTitle: cleanTitle,
+                        url: url
+                    });
+                }
             }
         });
 
         console.log(`[ElAmigos] Found ${candidates.length} candidates for "${query}"`);
 
-        const results = [];
-        for (const cand of candidates) {
-            try {
-                console.log(`[ElAmigos] Fetching details for ${cand.title}...`);
-                const detailHtml = await scrapeWithWindow(cand.url);
-                const $d = load(detailHtml);
+        // Find best match - must contain at least the search query text (case insensitive)
+        let bestMatch = null;
+        let bestScore = 0;
+        const comparisonName = (targetGameName || query).toLowerCase().trim();
 
-                // Parse size from title (e.g. "Game Name, 17.11GB")
-                let size = 'Unknown';
-                const titleText = $d('h3').first().text();
-                const sizeMatch = titleText.match(/,\s*([0-9.]+\s*[GM]B)/i);
-                if (sizeMatch) size = sizeMatch[1];
-
-                // 1. Try direct magnet (rare on main site)
-                let magnetLink = $d('a[href^="magnet:"]').first().attr('href');
-
-                // 2. Try to find the "Download" section links
-                if (!magnetLink) {
-                    // Look for links to elamigos-games.com or similar, or "Download Torrent" buttons
-                    const torrentLink = $d('a').filter((i, el) => {
-                        return $d(el).text().toLowerCase().includes('torrent') ||
-                            ($d(el).attr('href') && $d(el).attr('href').includes('torrent'));
-                    }).first().attr('href');
-
-                    if (torrentLink && torrentLink.startsWith('magnet:')) {
-                        magnetLink = torrentLink;
-                    }
-                }
-
-                // 3. Check for ANY magnet link in source
-                if (!magnetLink) {
-                    const match = detailHtml.match(/magnet:\?xt=urn:btih:[a-zA-Z0-9]{32,40}/);
-                    if (match) magnetLink = match[0];
-                }
-
-                // 4. Extract DDL Links (Rapidgator/DDownload)
-                const ddlLinks = [];
-                $d('h3, h4, strong').each((i, elem) => {
-                    const text = $d(elem).text().trim().toUpperCase();
-                    if (text.includes('RAPIDGATOR') || text.includes('DDOWNLOAD')) {
-                        const host = text.includes('RAPIDGATOR') ? 'Rapidgator' : 'DDownload';
-
-                        let next = $d(elem).next();
-                        while (next.length && !next.is('h3, h4, h2')) {
-                            next.find('a').each((j, a) => {
-                                const href = $d(a).attr('href');
-                                if (href && (href.includes('filecrypt') || href.includes('keeplinks'))) {
-                                    ddlLinks.push({ host, url: href });
-                                }
-                            });
-                            next = next.next();
-                        }
-                    }
-                });
-
-                if (magnetLink) {
-                    results.push({
-                        name: cand.title,
-                        detailUrl: cand.url,
-                        magnetLink,
-                        seeders: 100,
-                        leechers: 100,
-                        size,
-                        source: 'ElAmigos Site',
-                        repacker: 'ElAmigos'
-                    });
-                }
-
-                // Push DDL results
-                ddlLinks.forEach(link => {
-                    results.push({
-                        name: cand.title,
-                        detailUrl: link.url,
-                        magnetLink: '', // Empty for DDL
-                        ddlUrl: link.url,
-                        seeders: 0,
-                        leechers: 0,
-                        size,
-                        source: `ElAmigos - ${link.host}`,
-                        repacker: 'ElAmigos'
-                    });
-                });
-
-            } catch (e) {
-                console.error(`[ElAmigos] Failed to fetch details for ${cand.title}:`, e);
+        for (const candidate of candidates) {
+            const candidateTitleLower = candidate.cleanTitle.toLowerCase();
+            
+            // STRICT REQUIREMENT: Title must contain at least the main search terms
+            // Check if all important words from search query are in the title
+            // Use the same comparisonWords that was already calculated above
+            const allWordsMatch = comparisonWords.every(word => candidateTitleLower.includes(word));
+            
+            if (!allWordsMatch) {
+                console.log(`[ElAmigos] Rejecting "${candidate.cleanTitle}" - doesn't contain all search terms`);
+                continue;
+            }
+            
+            // Calculate relevance score
+            const score = calculateRelevanceScore(targetGameName || query, candidate.cleanTitle);
+            if (score > bestScore && score >= 80) {
+                bestScore = score;
+                bestMatch = candidate;
             }
         }
-        return results;
+
+        if (!bestMatch) {
+            console.log(`[ElAmigos] No relevant match found for "${comparisonName}" (must contain all search terms)`);
+            return [];
+        }
+
+        console.log(`[ElAmigos] Best match found: "${bestMatch.cleanTitle}" (score: ${bestScore})`);
+        console.log(`[ElAmigos] Game page URL: ${bestMatch.url}`);
+
+        // Step 2: Fetch details from the matched game page
+        try {
+            const detailHtml = await scrapeWithWindow(bestMatch.url);
+            const $d = load(detailHtml);
+
+            // Parse size from title or content
+            let size = 'Unknown';
+            const titleText = $d('h1, h2, h3').first().text();
+            const sizeMatch = titleText.match(/,\s*([0-9.]+\s*[GM]B)/i) || 
+                            detailHtml.match(/Size[:\s]+([0-9.]+\s*[GM]B)/i);
+            if (sizeMatch) size = sizeMatch[1];
+
+            // Look specifically for keeplinks.org links
+            let keeplink = null;
+            $d('a').each((i, elem) => {
+                const href = $d(elem).attr('href');
+                if (href && href.includes('keeplinks.org')) {
+                    keeplink = href;
+                    return false; // Break
+                }
+            });
+
+            // Also check in HTML source for keeplinks
+            if (!keeplink) {
+                const keeplinkMatch = detailHtml.match(/https?:\/\/[^\s"<>]*keeplinks\.org[^\s"<>]*/i);
+                if (keeplinkMatch) {
+                    keeplink = keeplinkMatch[0];
+                }
+            }
+
+            // If no keeplink found, look for filecrypt or other DDL links as fallback
+            if (!keeplink) {
+                $d('a').each((i, elem) => {
+                    const href = $d(elem).attr('href');
+                    if (href && (href.includes('filecrypt.cc') || href.includes('filecrypt.co'))) {
+                        keeplink = href;
+                        return false;
+                    }
+                });
+            }
+
+            if (!keeplink) {
+                console.log(`[ElAmigos] No keeplink found for "${bestMatch.cleanTitle}"`);
+                return [];
+            }
+
+            // Clean title for display
+            const displayTitle = bestMatch.originalTitle
+                .replace(/\s*–\s*ElAmigos/i, '')
+                .replace(/\s*-\s*ElAmigos/i, '')
+                .replace(/\s*\(.*?ElAmigos.*?\)/i, '')
+                .replace(/\s*\[.*?ElAmigos.*?\]/i, '')
+                .replace(/\s+/g, ' ')
+                .trim();
+
+            console.log(`[ElAmigos] ✅ Found keeplink for "${displayTitle}"`);
+
+            return [{
+                name: displayTitle,
+                detailUrl: bestMatch.url,
+                keeplink: keeplink,
+                size,
+                source: 'ElAmigos Site',
+                repacker: 'ElAmigos',
+                relevanceScore: bestScore
+            }];
+        } catch (e) {
+            console.error(`[ElAmigos] Failed to fetch details for ${bestMatch.cleanTitle}:`, e);
+            return [];
+        }
     } catch (e) {
         console.error('[ElAmigos] Search failed:', e);
         return [];
@@ -1312,6 +1477,32 @@ function convertRomanToArabic(text) {
     return modified ? newWords.join(' ') : null;
 }
 
+// Helper to convert Arabic numerals to Roman
+function convertArabicToRoman(text) {
+    const arabicToRomanMap = {
+        '1': 'I', '2': 'II', '3': 'III', '4': 'IV', '5': 'V',
+        '6': 'VI', '7': 'VII', '8': 'VIII', '9': 'IX', '10': 'X',
+        '11': 'XI', '12': 'XII', '13': 'XIII', '14': 'XIV', '15': 'XV'
+    };
+
+    const words = text.split(/\s+/);
+    let modified = false;
+
+    const newWords = words.map(word => {
+        // Remove common punctuation for checking
+        const cleanWord = word.replace(/[:\-]/g, '');
+        
+        // Check if it's a number (1-15)
+        if (arabicToRomanMap[cleanWord]) {
+            modified = true;
+            return arabicToRomanMap[cleanWord];
+        }
+        return word;
+    });
+
+    return modified ? newWords.join(' ') : null;
+}
+
 // Main search function
 export async function searchTorrents(gameName, options = {}) {
     const {
@@ -1375,11 +1566,6 @@ export async function searchTorrents(gameName, options = {}) {
     const searchQuery = targetGameName || gameName;
 
     let queries = [searchQuery];
-    const altQuery = convertRomanToArabic(searchQuery);
-    if (altQuery) {
-        console.log(`[TorrentSearch] Adding alternative query: "${altQuery}"`);
-        queries.push(altQuery);
-    }
 
     const allResults = [];
     const seenMagnets = new Set();
@@ -1411,15 +1597,15 @@ export async function searchTorrents(gameName, options = {}) {
         }
     };
 
-    // Parallel search: FitGirl Site and Rutor at the same time
+    // Parallel search: FitGirl Site, ElAmigos, and conditionally Rutor
     const performSearch = async (searchQueries) => {
         const allSiteResults = [];
 
-        // Parallel search: FitGirl Site and Rutor.info simultaneously
+        // Parallel search: FitGirl Site and ElAmigos simultaneously
         const fitgirlSite = TORRENT_SITES.find(s => s.name === 'FitGirl Site');
         const rutorSite = TORRENT_SITES.find(s => s.name === 'Rutor.info');
 
-        // Create all search promises in parallel
+        // Create search promises for FitGirl and ElAmigos
         const searchPromises = [];
 
         // FitGirl Site searches
@@ -1435,10 +1621,36 @@ export async function searchTorrents(gameName, options = {}) {
             }
         }
 
-        // Rutor.info searches (in parallel with FitGirl)
-        if (rutorSite) {
+        // ElAmigos searches (always search, in parallel with FitGirl)
+        for (const query of searchQueries) {
+            searchPromises.push(
+                (async () => {
+                    try {
+                        console.log(`[TorrentSearch] Searching ElAmigos for "${query}"...`);
+                        const results = await searchElAmigos(query, targetGameName);
+                        console.log(`[TorrentSearch] Found ${results.length} results from ElAmigos`);
+                        return { siteName: 'ElAmigos Site', results };
+                    } catch (err) {
+                        console.warn(`[TorrentSearch] ElAmigos search failed for "${query}":`, err.message);
+                        return { siteName: 'ElAmigos Site', results: [] };
+                    }
+                })()
+            );
+        }
+
+        // Wait for FitGirl and ElAmigos searches to complete
+        const initialResults = await Promise.all(searchPromises);
+        allSiteResults.push(...initialResults);
+
+        // Check if FitGirl Site has any results
+        const hasFitGirlSiteResults = allSiteResults.some(r => r.siteName === 'FitGirl Site' && r.results && r.results.length > 0);
+
+        // Only search Rutor if FitGirl has no results
+        if (!hasFitGirlSiteResults && rutorSite) {
+            console.log('[TorrentSearch] No FitGirl Site results found. Searching Rutor.info...');
+            const rutorPromises = [];
             for (const query of searchQueries) {
-                searchPromises.push(
+                rutorPromises.push(
                     searchSite(query, rutorSite)
                         .catch(err => {
                             console.warn(`[TorrentSearch] Rutor.info search failed for "${query}":`, err.message);
@@ -1446,16 +1658,13 @@ export async function searchTorrents(gameName, options = {}) {
                         })
                 );
             }
+            const rutorResults = await Promise.all(rutorPromises);
+            allSiteResults.push(...rutorResults);
+        } else if (hasFitGirlSiteResults) {
+            console.log('[TorrentSearch] FitGirl Site results found. Skipping Rutor.info search.');
         }
 
-        // Wait for all searches to complete in parallel
-        const results = await Promise.all(searchPromises);
-        allSiteResults.push(...results);
-
-        // Check if FitGirl Site has any results
-        const hasFitGirlSiteResults = allSiteResults.some(r => r.siteName === 'FitGirl Site' && r.results && r.results.length > 0);
-
-        // Check if Rutor has any results
+        // Check if Rutor has any results (for BitSearch decision)
         const hasRutorResults = allSiteResults.some(r => r.siteName === 'Rutor.info' && r.results && r.results.length > 0);
 
         // Only search BitSearch if FitGirl Site and Rutor have no results
@@ -1482,11 +1691,15 @@ export async function searchTorrents(gameName, options = {}) {
             if (!results || results.length === 0) continue;
 
             // Exclusive Priority Filter: FitGirl Site > Rutor.info > Others
+            // BUT: Always include ElAmigos Site results regardless of FitGirl
             if (hasFitGirlSiteResults) {
-                if (siteName !== 'FitGirl Site') continue;
+                // Skip Rutor and others, but keep FitGirl and ElAmigos
+                if (siteName !== 'FitGirl Site' && siteName !== 'ElAmigos Site') continue;
             } else if (hasRutorResults) {
-                if (siteName !== 'Rutor.info') continue;
+                // Skip others, but keep Rutor and ElAmigos
+                if (siteName !== 'Rutor.info' && siteName !== 'ElAmigos Site') continue;
             }
+            // If no FitGirl or Rutor, include everything (including ElAmigos)
 
             let filtered = results;
             const isDirectSite = siteName === 'Rutor.info' || siteName === 'FitGirl Site';
@@ -1529,7 +1742,7 @@ export async function searchTorrents(gameName, options = {}) {
         }
     };
 
-    // 1. Initial Search
+    // 1. Initial Search with original query
     await performSearch(queries);
 
     // 2. Fallback: Specific Repacker Search
@@ -1549,13 +1762,13 @@ export async function searchTorrents(gameName, options = {}) {
         }
     }
 
-    // First, filter only by magnetLink (don't filter by seeders yet - score very relevant results first)
+    // First, filter only by magnetLink or keeplink (don't filter by seeders yet - score very relevant results first)
     let filteredResults = allResults
-        .filter(r => r.magnetLink);
+        .filter(r => r.magnetLink || r.keeplink);
 
     // Separate FitGirl Site and ElAmigos Site results from others BEFORE filtering
     // These sites are trusted and should not be filtered
-    const trustedSources = ['FitGirl Site', 'ElAmigos Site', 'ElAmigos - Rapidgator', 'ElAmigos - DDownload'];
+    const trustedSources = ['FitGirl Site', 'ElAmigos Site'];
     const trustedResults = filteredResults.filter(r => trustedSources.includes(r.source));
     const otherResults = filteredResults.filter(r => !trustedSources.includes(r.source));
 
@@ -1593,21 +1806,26 @@ export async function searchTorrents(gameName, options = {}) {
     // Combine trusted results (no filtering) with filtered other results
     const allFilteredResults = [...trustedResults, ...filteredOtherResults];
 
-    // Separate FitGirl Site results from others for return
+    // Separate FitGirl Site, ElAmigos Site, and other results for return
     const fitgirlSiteResults = allFilteredResults
         .filter(r => r.source === 'FitGirl Site');
 
+    const elamigosSiteResults = allFilteredResults
+        .filter(r => r.source === 'ElAmigos Site');
+
     const nonFitgirlResults = allFilteredResults
-        .filter(r => r.source !== 'FitGirl Site')
+        .filter(r => r.source !== 'FitGirl Site' && r.source !== 'ElAmigos Site')
         .slice(0, maxResults);
 
-    // Limit FitGirl Site results (already sorted by relevance)
+    // Limit results (already sorted by relevance)
     const fitgirlResultsLimited = fitgirlSiteResults.slice(0, maxResults);
+    const elamigosResultsLimited = elamigosSiteResults.slice(0, maxResults);
 
-    console.log(`[TorrentSearch] Returning ${fitgirlResultsLimited.length} FitGirl Site results and ${nonFitgirlResults.length} other results`);
+    console.log(`[TorrentSearch] Returning ${fitgirlResultsLimited.length} FitGirl Site results, ${elamigosResultsLimited.length} ElAmigos Site results, and ${nonFitgirlResults.length} other results`);
 
     return {
         fitgirlResults: fitgirlResultsLimited,
+        elamigosResults: elamigosResultsLimited,
         otherResults: nonFitgirlResults
     };
 }

@@ -77,6 +77,7 @@ function App() {
   const [showDropdown, setShowDropdown] = useState(false); // Dropdown state
   const [torrentResults, setTorrentResults] = useState([]);
   const [fitgirlResults, setFitgirlResults] = useState([]);
+  const [elamigosResults, setElamigosResults] = useState([]);
   const [otherTorrentResults, setOtherTorrentResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [selectedSearchGame, setSelectedSearchGame] = useState(null);
@@ -1763,6 +1764,7 @@ function App() {
     setSearchLoading(true);
     setTorrentResults([]); // Clear previous torrent results
     setFitgirlResults([]);
+    setElamigosResults([]);
     setOtherTorrentResults([]);
     try {
       // Search SteamGridDB for game info
@@ -1813,6 +1815,7 @@ function App() {
           // New format: separated results
           // Results are already sorted by relevance from backend, but we can re-sort if user wants
           let fitgirl = result.data.fitgirlResults || [];
+          let elamigos = result.data.elamigosResults || [];
           let others = result.data.otherResults || [];
           
           // Sort FitGirl results (respect relevance score first, then user preference)
@@ -1841,6 +1844,29 @@ function App() {
           }
           // If sortBy is 'relevance' or undefined, keep original order (already sorted by backend)
           
+          // Sort ElAmigos results (same logic as FitGirl)
+          if (sortBy === 'seeders') {
+            elamigos = elamigos.sort((a, b) => {
+              if (a.relevanceScore !== undefined && b.relevanceScore !== undefined) {
+                if (b.relevanceScore !== a.relevanceScore) {
+                  return b.relevanceScore - a.relevanceScore;
+                }
+              }
+              return (b.seeders || 0) - (a.seeders || 0);
+            });
+          } else if (sortBy === 'size') {
+            elamigos = elamigos.sort((a, b) => {
+              if (a.relevanceScore !== undefined && b.relevanceScore !== undefined) {
+                if (b.relevanceScore !== a.relevanceScore) {
+                  return b.relevanceScore - a.relevanceScore;
+                }
+              }
+              const sizeA = parseSize(a.size);
+              const sizeB = parseSize(b.size);
+              return sizeB - sizeA;
+            });
+          }
+          
           // Sort other results
           if (sortBy === 'seeders') {
             others = others.sort((a, b) => {
@@ -1865,9 +1891,10 @@ function App() {
           }
           
           setFitgirlResults(fitgirl);
+          setElamigosResults(elamigos);
           setOtherTorrentResults(others);
           // Keep old format for backward compatibility
-          setTorrentResults([...fitgirl, ...others]);
+          setTorrentResults([...fitgirl, ...elamigos, ...others]);
         } else {
           // Old format: single array (backward compatibility)
           let results = result.data;
@@ -3136,7 +3163,7 @@ function App() {
               )}
 
               {/* Torrent Results */}
-              {!searchLoading && (fitgirlResults.length > 0 || otherTorrentResults.length > 0) && (
+              {!searchLoading && (fitgirlResults.length > 0 || elamigosResults.length > 0 || otherTorrentResults.length > 0) && (
                 <div style={{
                   background: 'rgba(255, 255, 255, 0.03)',
                   borderRadius: '12px',
@@ -3241,10 +3268,108 @@ function App() {
                       </table>
                       
                       {/* Separator - More visible */}
-                      {otherTorrentResults.length > 0 && (
+                      {(elamigosResults.length > 0 || otherTorrentResults.length > 0) && (
                         <div style={{
                           height: '3px',
                           background: 'linear-gradient(90deg, rgba(255, 105, 180, 0.2), rgba(100, 200, 255, 0.2))',
+                          margin: '25px 15px',
+                          borderRadius: '2px',
+                          borderTop: '1px solid rgba(255, 255, 255, 0.15)',
+                          borderBottom: '1px solid rgba(255, 255, 255, 0.15)',
+                          boxShadow: '0 2px 4px rgba(0, 0, 0, 0.2)'
+                        }}></div>
+                      )}
+                    </>
+                  )}
+
+                  {/* ElAmigos Site Results */}
+                  {elamigosResults.length > 0 && (
+                    <>
+                      <div style={{
+                        background: 'rgba(100, 200, 255, 0.15)',
+                        padding: '10px 15px',
+                        borderBottom: '2px solid rgba(100, 200, 255, 0.3)',
+                        fontWeight: 'bold',
+                        fontSize: '14px',
+                        color: '#64c8ff'
+                      }}>
+                        ElAmigos Site ({elamigosResults.length})
+                      </div>
+                      <table style={{
+                        width: '100%',
+                        borderCollapse: 'collapse'
+                      }}>
+                        <thead>
+                          <tr style={{
+                            background: 'rgba(255, 255, 255, 0.05)',
+                            borderBottom: '1px solid rgba(255, 255, 255, 0.1)'
+                          }}>
+                            <th style={{ padding: '15px', textAlign: 'left' }}>Name</th>
+                            <th style={{ padding: '15px', textAlign: 'left' }}>Repacker</th>
+                            <th style={{ padding: '15px', textAlign: 'center' }}>Size</th>
+                            <th style={{ padding: '15px', textAlign: 'center' }}>Source</th>
+                            <th style={{ padding: '15px', textAlign: 'center' }}>Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {elamigosResults.map((torrent, index) => (
+                            <tr
+                              key={`elamigos-${index}`}
+                              style={{
+                                borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
+                                transition: 'background 0.2s ease'
+                              }}
+                              onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'}
+                              onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                            >
+                              <td style={{ padding: '15px', maxWidth: '400px' }}>
+                                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {torrent.name}
+                                </div>
+                              </td>
+                              <td style={{ padding: '15px' }}>
+                                <span style={{
+                                  padding: '4px 8px',
+                                  borderRadius: '4px',
+                                  background: 'rgba(100, 200, 255, 0.2)',
+                                  fontSize: '12px'
+                                }}>
+                                  {torrent.repacker}
+                                </span>
+                              </td>
+                              <td style={{ padding: '15px', textAlign: 'center' }}>{torrent.size}</td>
+                              <td style={{ padding: '15px', textAlign: 'center', fontSize: '12px', color: 'rgba(255, 255, 255, 0.6)' }}>
+                                {torrent.source}
+                              </td>
+                              <td style={{ padding: '15px', textAlign: 'center' }}>
+                                <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+                                  {torrent.keeplink && (
+                                    <button
+                                      onClick={() => handleCopyToClipboard(torrent.keeplink)}
+                                      className="btn-secondary"
+                                      style={{
+                                        padding: '8px 16px',
+                                        fontSize: '14px',
+                                        background: 'rgba(255, 255, 255, 0.1)',
+                                        border: '1px solid rgba(255, 255, 255, 0.2)'
+                                      }}
+                                      title="Copy keeplink to clipboard"
+                                    >
+                                      Clipboard
+                                    </button>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      
+                      {/* Separator - More visible */}
+                      {otherTorrentResults.length > 0 && (
+                        <div style={{
+                          height: '3px',
+                          background: 'linear-gradient(90deg, rgba(100, 200, 255, 0.2), rgba(100, 200, 255, 0.2))',
                           margin: '25px 15px',
                           borderRadius: '2px',
                           borderTop: '1px solid rgba(255, 255, 255, 0.15)',
@@ -3358,7 +3483,7 @@ function App() {
               )}
 
               {/* No Results */}
-              {!searchLoading && searchQuery && fitgirlResults.length === 0 && otherTorrentResults.length === 0 && selectedSearchGame && (
+              {!searchLoading && searchQuery && fitgirlResults.length === 0 && elamigosResults.length === 0 && otherTorrentResults.length === 0 && selectedSearchGame && (
                 <div className="no-games">
                   No torrents found for "{selectedSearchGame.name}". Try searching for a different game or check your filter settings.
                 </div>
