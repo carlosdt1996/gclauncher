@@ -676,10 +676,9 @@ async function searchElAmigos(query, targetGameName = null) {
         const candidates = [];
         
         // Look for h3 elements on main page that contain the search text
-        const searchTextLower = query.toLowerCase();
-        const targetGameNameLower = targetGameName ? targetGameName.toLowerCase() : null;
+        const searchTextLower = query.toLowerCase().trim();
+        const targetGameNameLower = targetGameName ? targetGameName.toLowerCase().trim() : null;
         const comparisonText = targetGameNameLower || searchTextLower;
-        const comparisonWords = comparisonText.split(/\s+/).filter(w => w.length > 2); // Filter out short words
         
         $main('h3').each((i, elem) => {
             if (candidates.length >= 50) return false; // Check more candidates
@@ -688,10 +687,9 @@ async function searchElAmigos(query, targetGameName = null) {
             const title = $h3.text().trim();
             const titleLower = title.toLowerCase();
             
-            // STRICT: Title must contain all important words from search
-            const allWordsMatch = comparisonWords.every(word => titleLower.includes(word));
-            
-            if (!allWordsMatch) {
+            // STRICT: Title must contain the complete search text as a sequence
+            // The entire search query must appear in the title (not just individual words)
+            if (!titleLower.includes(comparisonText)) {
                 return; // Skip this candidate
             }
             
@@ -736,44 +734,45 @@ async function searchElAmigos(query, targetGameName = null) {
 
         console.log(`[ElAmigos] Found ${candidates.length} candidates for "${query}"`);
 
-        // Find best match - must contain at least the search query text (case insensitive)
-        let bestMatch = null;
-        let bestScore = 0;
+        // Find all relevant matches - must contain at least the search query text (case insensitive)
+        const relevantMatches = [];
         const comparisonName = (targetGameName || query).toLowerCase().trim();
 
         for (const candidate of candidates) {
             const candidateTitleLower = candidate.cleanTitle.toLowerCase();
             
-            // STRICT REQUIREMENT: Title must contain at least the main search terms
-            // Check if all important words from search query are in the title
-            // Use the same comparisonWords that was already calculated above
-            const allWordsMatch = comparisonWords.every(word => candidateTitleLower.includes(word));
-            
-            if (!allWordsMatch) {
-                console.log(`[ElAmigos] Rejecting "${candidate.cleanTitle}" - doesn't contain all search terms`);
+            // STRICT REQUIREMENT: Title must contain the complete search text as a sequence
+            // The entire search query must appear in the title (not just individual words)
+            if (!candidateTitleLower.includes(comparisonText)) {
+                console.log(`[ElAmigos] Rejecting "${candidate.cleanTitle}" - doesn't contain complete search text`);
                 continue;
             }
             
             // Calculate relevance score
             const score = calculateRelevanceScore(targetGameName || query, candidate.cleanTitle);
-            if (score > bestScore && score >= 80) {
-                bestScore = score;
-                bestMatch = candidate;
+            if (score >= 80) {
+                relevantMatches.push({ candidate, score });
             }
         }
 
-        if (!bestMatch) {
+        if (relevantMatches.length === 0) {
             console.log(`[ElAmigos] No relevant match found for "${comparisonName}" (must contain all search terms)`);
             return [];
         }
 
-        console.log(`[ElAmigos] Best match found: "${bestMatch.cleanTitle}" (score: ${bestScore})`);
-        console.log(`[ElAmigos] Game page URL: ${bestMatch.url}`);
+        // Sort by score (highest first)
+        relevantMatches.sort((a, b) => b.score - a.score);
 
-        // Step 2: Fetch details from the matched game page
-        try {
-            const detailHtml = await scrapeWithWindow(bestMatch.url);
-            const $d = load(detailHtml);
+        console.log(`[ElAmigos] Found ${relevantMatches.length} relevant matches`);
+
+        // Step 2: Fetch details from all matched game pages
+        const results = [];
+        
+        for (const { candidate, score } of relevantMatches) {
+            try {
+                console.log(`[ElAmigos] Fetching details for "${candidate.cleanTitle}" (score: ${score})`);
+                const detailHtml = await scrapeWithWindow(candidate.url);
+                const $d = load(detailHtml);
 
             // Parse size from title or content
             let size = 'Unknown';
@@ -811,35 +810,40 @@ async function searchElAmigos(query, targetGameName = null) {
                 });
             }
 
-            if (!keeplink) {
-                console.log(`[ElAmigos] No keeplink found for "${bestMatch.cleanTitle}"`);
-                return [];
+                if (!keeplink) {
+                    console.log(`[ElAmigos] No keeplink found for "${candidate.cleanTitle}"`);
+                    continue; // Skip this one but continue with others
+                }
+
+                // Clean title for display
+                const displayTitle = candidate.originalTitle
+                    .replace(/\s*–\s*ElAmigos/i, '')
+                    .replace(/\s*-\s*ElAmigos/i, '')
+                    .replace(/\s*\(.*?ElAmigos.*?\)/i, '')
+                    .replace(/\s*\[.*?ElAmigos.*?\]/i, '')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+
+                console.log(`[ElAmigos] ✅ Found keeplink for "${displayTitle}"`);
+
+                results.push({
+                    name: displayTitle,
+                    detailUrl: candidate.url,
+                    keeplink: keeplink,
+                    size,
+                    source: 'ElAmigos Site',
+                    repacker: 'ElAmigos',
+                    relevanceScore: score
+                });
+            } catch (e) {
+                console.error(`[ElAmigos] Failed to fetch details for ${candidate.cleanTitle}:`, e);
+                // Continue with next match instead of returning empty
+                continue;
             }
-
-            // Clean title for display
-            const displayTitle = bestMatch.originalTitle
-                .replace(/\s*–\s*ElAmigos/i, '')
-                .replace(/\s*-\s*ElAmigos/i, '')
-                .replace(/\s*\(.*?ElAmigos.*?\)/i, '')
-                .replace(/\s*\[.*?ElAmigos.*?\]/i, '')
-                .replace(/\s+/g, ' ')
-                .trim();
-
-            console.log(`[ElAmigos] ✅ Found keeplink for "${displayTitle}"`);
-
-            return [{
-                name: displayTitle,
-                detailUrl: bestMatch.url,
-                keeplink: keeplink,
-                size,
-                source: 'ElAmigos Site',
-                repacker: 'ElAmigos',
-                relevanceScore: bestScore
-            }];
-        } catch (e) {
-            console.error(`[ElAmigos] Failed to fetch details for ${bestMatch.cleanTitle}:`, e);
-            return [];
         }
+
+        console.log(`[ElAmigos] Returning ${results.length} results`);
+        return results;
     } catch (e) {
         console.error('[ElAmigos] Search failed:', e);
         return [];
