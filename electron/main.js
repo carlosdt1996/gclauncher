@@ -317,6 +317,51 @@ app.on('ready', async () => {
         return store.get('installFolder') || '';
     });
 
+    // Repacker management handlers
+    ipcMain.handle('get-repackers', () => {
+        const repackers = store.get('repackers');
+        // Default repackers if not set
+        if (!repackers || !Array.isArray(repackers) || repackers.length === 0) {
+            const defaultRepackers = ['fitgirl', 'elamigos', 'rune', 'empress', 'tenoke', 'dodi'];
+            store.set('repackers', defaultRepackers);
+            return defaultRepackers;
+        }
+        return repackers;
+    });
+
+    ipcMain.handle('add-repacker', (event, repacker) => {
+        const repackers = store.get('repackers') || [];
+        const repackerLower = repacker.toLowerCase().trim();
+        if (repackerLower && !repackers.includes(repackerLower)) {
+            repackers.push(repackerLower);
+            store.set('repackers', repackers);
+            console.log(`[Repackers] Added repacker: ${repackerLower}`);
+            return { success: true, repackers };
+        }
+        return { success: false, error: 'Repacker already exists or invalid name', repackers };
+    });
+
+    ipcMain.handle('remove-repacker', (event, repacker) => {
+        const repackers = store.get('repackers') || [];
+        const repackerLower = repacker.toLowerCase().trim();
+        const filtered = repackers.filter(r => r !== repackerLower);
+        if (filtered.length !== repackers.length) {
+            store.set('repackers', filtered);
+            console.log(`[Repackers] Removed repacker: ${repackerLower}`);
+            return { success: true, repackers: filtered };
+        }
+        return { success: false, error: 'Repacker not found', repackers };
+    });
+
+    ipcMain.handle('set-repackers', (event, repackers) => {
+        if (Array.isArray(repackers)) {
+            store.set('repackers', repackers.map(r => r.toLowerCase().trim()));
+            console.log(`[Repackers] Set repackers: ${repackers.join(', ')}`);
+            return { success: true };
+        }
+        return { success: false, error: 'Invalid repackers array' };
+    });
+
     ipcMain.handle('get-game-image', async (event, gameNameOrId, gameName) => {
         const apiKey = store.get('apiKey');
         if (!apiKey) {

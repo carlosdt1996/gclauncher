@@ -78,4 +78,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Window controls
     toggleFullscreen: () => ipcRenderer.invoke('toggle-fullscreen'),
     restoreAndFocusWindow: () => ipcRenderer.invoke('restore-and-focus-window'),
+    // Repacker management
+    getRepackers: () => ipcRenderer.invoke('get-repackers'),
+    addRepacker: (repacker) => ipcRenderer.invoke('add-repacker', repacker),
+    removeRepacker: (repacker) => ipcRenderer.invoke('remove-repacker', repacker),
+    setRepackers: (repackers) => ipcRenderer.invoke('set-repackers', repackers),
 });

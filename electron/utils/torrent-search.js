@@ -20,15 +20,61 @@ const TORRENT_SITES = [
     }
 ];
 
+// Helper function to remove special characters from game name for fallback search
+function removeSpecialCharacters(text) {
+    return text
+        .replace(/:/g, ' ') // Replace colons with space (e.g., "Dying Light: The Beast" -> "Dying Light The Beast")
+        .replace(/-/g, ' ') // Replace hyphens with space
+        .replace(/–/g, ' ') // Replace en-dash with space
+        .replace(/—/g, ' ') // Replace em-dash with space
+        .replace(/'/g, '') // Remove apostrophes
+        .replace(/"/g, '') // Remove quotes
+        .replace(/\./g, ' ') // Replace dots with space
+        .replace(/,/g, '') // Remove commas
+        .replace(/\s+/g, ' ') // Replace multiple spaces with single space
+        .trim();
+}
+
 // Direct Rutor.info Search (for FitGirl games)
 async function searchRutor(query) {
     // Remove repacker names from query if present (e.g., "Game Name fitgirl" -> "Game Name")
     // Search with just the game name, filter for FitGirl later
-    const repackerNames = ['fitgirl', 'fit girl', 'fit-girl', 'elamigos', 'el amigos', 'el-amigos', 'rune', 'empress', 'tenoke', 'dodi'];
+    // Get repackers from store (dynamic list)
+    const storedRepackers = store.get('repackers') || ['fitgirl', 'elamigos', 'rune', 'empress', 'tenoke', 'dodi'];
+    // Create variations for each repacker (with spaces, hyphens, etc.)
+    const repackerNames = [];
+    storedRepackers.forEach(repacker => {
+        repackerNames.push(repacker);
+        // Add variations
+        if (repacker.includes(' ')) {
+            repackerNames.push(repacker.replace(/\s+/g, '-'));
+            repackerNames.push(repacker.replace(/\s+/g, ''));
+        }
+        if (repacker.includes('-')) {
+            repackerNames.push(repacker.replace(/-/g, ' '));
+            repackerNames.push(repacker.replace(/-/g, ''));
+        }
+        // Add "el amigos" -> "elamigos" variations
+        if (repacker === 'elamigos') {
+            repackerNames.push('el amigos', 'el-amigos');
+        }
+        if (repacker === 'el amigos' || repacker === 'el-amigos') {
+            repackerNames.push('elamigos');
+        }
+        // Add "fitgirl" variations
+        if (repacker === 'fitgirl') {
+            repackerNames.push('fit girl', 'fit-girl');
+        }
+        if (repacker === 'fit girl' || repacker === 'fit-girl') {
+            repackerNames.push('fitgirl');
+        }
+    });
+    // Remove duplicates
+    const uniqueRepackerNames = [...new Set(repackerNames)];
     let cleanQuery = query;
 
     // Remove repacker names from the end of the query
-    for (const repacker of repackerNames) {
+    for (const repacker of uniqueRepackerNames) {
         const regex = new RegExp(`\\s+${repacker.replace(/[-\s]/g, '[\\s-]?')}\\s*$`, 'i');
         cleanQuery = cleanQuery.replace(regex, '').trim();
     }
@@ -339,9 +385,9 @@ async function searchFitGirlSite(query, targetGameName = null, sequelNumber = nu
                             name: displayTitle,
                             detailUrl: directUrl,
                             magnetLink: magnetLink,
-                            seeders: seeders,
-                            leechers: leechers,
-                            size,
+                            seeders: seeders || 100,
+                            leechers: leechers || 0,
+                            size: size || 'Unknown',
                             source: 'FitGirl Site',
                             repacker: 'FitGirl',
                             imageUrl: image,
@@ -435,9 +481,9 @@ async function searchFitGirlSite(query, targetGameName = null, sequelNumber = nu
                                     name: displayTitle,
                                     detailUrl: altDirectUrl,
                                     magnetLink: magnetLink,
-                                    seeders: seeders,
-                                    leechers: leechers,
-                                    size,
+                                    seeders: seeders || 100,
+                                    leechers: leechers || 0,
+                                    size: size || 'Unknown',
                                     source: 'FitGirl Site',
                                     repacker: 'FitGirl',
                                     imageUrl: image,
@@ -647,9 +693,9 @@ async function processFitGirlCandidates(candidates, comparisonName, directPageUr
         name: displayTitle, // Use cleaned original title that keeps editions
         detailUrl: pageUrl,
         magnetLink: magnetLink,
-        seeders: seeders, // Extracted from page stats
-        leechers: leechers, // Extracted from page stats
-        size,
+        seeders: seeders || 100, // Extracted from page stats, default 100
+        leechers: leechers || 0, // Extracted from page stats, default 0
+        size: size || 'Unknown',
         source: 'FitGirl Site',
         repacker: 'FitGirl',
         imageUrl: image,
@@ -884,7 +930,8 @@ async function scrapeWithWindow(url) {
                         // Try to get HTML immediately
                         const html = await win.webContents.executeJavaScript('document.documentElement.outerHTML');
                         // Check if page seems complete (has body content)
-                        if (html && html.length > 5000 && html.includes('</body>')) {
+                        // Reduced threshold for faster loading
+                        if (html && html.length > 3000 && html.includes('</body>')) {
                             clearTimeout(timeout);
                             if (!win.isDestroyed()) win.destroy();
                             resolve(html);
@@ -1270,30 +1317,104 @@ function extractSequelNumber(gameName) {
 
 // Helper to extract base game name and subtitle/sequel identifier
 function extractGameParts(gameName) {
+    // List of repacker names to ignore when detecting subtitles
+    // Get repackers from store (dynamic list)
+    const storedRepackers = store.get('repackers') || ['fitgirl', 'elamigos', 'rune', 'empress', 'tenoke', 'dodi'];
+    // Create variations for each repacker (with spaces, hyphens, etc.)
+    const repackerNames = [];
+    storedRepackers.forEach(repacker => {
+        repackerNames.push(repacker);
+        // Add variations
+        if (repacker.includes(' ')) {
+            repackerNames.push(repacker.replace(/\s+/g, '-'));
+            repackerNames.push(repacker.replace(/\s+/g, ''));
+        }
+        if (repacker.includes('-')) {
+            repackerNames.push(repacker.replace(/-/g, ' '));
+            repackerNames.push(repacker.replace(/-/g, ''));
+        }
+        // Add "el amigos" -> "elamigos" variations
+        if (repacker === 'elamigos') {
+            repackerNames.push('el amigos', 'el-amigos');
+        }
+        if (repacker === 'el amigos' || repacker === 'el-amigos') {
+            repackerNames.push('elamigos');
+        }
+        // Add "fitgirl" variations
+        if (repacker === 'fitgirl') {
+            repackerNames.push('fit girl', 'fit-girl');
+        }
+        if (repacker === 'fit girl' || repacker === 'fit-girl') {
+            repackerNames.push('fitgirl');
+        }
+    });
+    // Remove duplicates
+    const uniqueRepackerNames = [...new Set(repackerNames)];
+    
     // Normalize the name
     const normalized = gameName.trim();
 
     // Try to split by colon (most common pattern for subtitles)
     const colonMatch = normalized.match(/^(.+?)\s*:\s*(.+)$/);
     if (colonMatch) {
-        return {
-            baseName: colonMatch[1].trim(),
-            subtitle: colonMatch[2].trim(),
-            hasSubtitle: true
-        };
+        const afterColon = colonMatch[2].trim();
+        // Check if after colon is a repacker name (ignore it)
+        const isRepacker = uniqueRepackerNames.some(repacker => 
+            afterColon.toLowerCase() === repacker.toLowerCase() ||
+            afterColon.toLowerCase().startsWith(repacker.toLowerCase() + ' ')
+        );
+        if (!isRepacker) {
+            return {
+                baseName: colonMatch[1].trim(),
+                subtitle: afterColon,
+                hasSubtitle: true
+            };
+        }
     }
 
     // Try to split by dash/em dash (alternative pattern)
-    const dashMatch = normalized.match(/^(.+?)\s*[–-]\s*(.+)$/);
+    // Handle both with and without spaces around dash
+    const dashMatch = normalized.match(/^(.+?)[\s]*[–-][\s]*(.+)$/);
     if (dashMatch) {
-        // Check if the part after dash looks like a subtitle (not a build number or edition)
         const afterDash = dashMatch[2].trim();
+        // Check if the part after dash is a repacker name (ignore it)
+        // Normalize by removing dots, spaces, and hyphens for comparison
+        const afterDashNormalized = afterDash.toLowerCase().replace(/[.\s\-]/g, '');
+        const isRepacker = uniqueRepackerNames.some(repacker => {
+            const repackerNormalized = repacker.toLowerCase().replace(/[-\s]/g, '');
+            // Check exact match after normalizing
+            if (afterDashNormalized === repackerNormalized) {
+                console.log(`[extractGameParts] Detected repacker "${repacker}" in "${gameName}" (normalized: "${afterDashNormalized}")`);
+                return true;
+            }
+            // Also check with original separators (exact match or starts with)
+            const afterDashLower = afterDash.toLowerCase();
+            const repackerLower = repacker.toLowerCase();
+            if (afterDashLower === repackerLower ||
+                afterDashLower.startsWith(repackerLower + ' ') ||
+                afterDashLower.startsWith(repackerLower + '-') ||
+                afterDashLower.startsWith(repackerLower + '.')) {
+                console.log(`[extractGameParts] Detected repacker "${repacker}" in "${gameName}" (exact/starts with match)`);
+                return true;
+            }
+            return false;
+        });
         // If it starts with "Build", "v", or looks like a version, it's not a subtitle
-        if (!/^(Build|v\d|Version|\d+\.\d+)/i.test(afterDash)) {
+        // Also ignore if it's a repacker name
+        if (!isRepacker && !/^(Build|v\d|Version|\d+\.\d+)/i.test(afterDash)) {
             return {
                 baseName: dashMatch[1].trim(),
                 subtitle: afterDash,
                 hasSubtitle: true
+            };
+        }
+        // If it's a repacker, return without subtitle (don't treat repacker as subtitle)
+        if (isRepacker) {
+            console.log(`[extractGameParts] Ignoring repacker in "${gameName}", returning no subtitle`);
+            return {
+                baseName: dashMatch[1].trim(),
+                subtitle: null,
+                hasSubtitle: false
             };
         }
     }
@@ -1301,11 +1422,19 @@ function extractGameParts(gameName) {
     // Check for "The [Something]" pattern (e.g., "Dying Light The Beast")
     const theMatch = normalized.match(/^(.+?)\s+The\s+(.+)$/i);
     if (theMatch) {
-        return {
-            baseName: theMatch[1].trim(),
-            subtitle: `The ${theMatch[2].trim()}`,
-            hasSubtitle: true
-        };
+        const afterThe = theMatch[2].trim();
+        // Check if after "The" is a repacker name (ignore it)
+        const isRepacker = uniqueRepackerNames.some(repacker => 
+            afterThe.toLowerCase() === repacker.toLowerCase() ||
+            afterThe.toLowerCase().startsWith(repacker.toLowerCase() + ' ')
+        );
+        if (!isRepacker) {
+            return {
+                baseName: theMatch[1].trim(),
+                subtitle: `The ${afterThe}`,
+                hasSubtitle: true
+            };
+        }
     }
 
     // No subtitle found
@@ -1318,8 +1447,53 @@ function extractGameParts(gameName) {
 
 // Helper to check if a title matches the specific sequel (by number or subtitle)
 function matchesSequel(title, sequelNumber, targetSubtitle = null) {
-    const titleParts = extractGameParts(title);
-    const titleSequelNum = extractSequelNumber(title);
+    // Remove repacker names from title before extracting parts to avoid false subtitle detection
+    // Get repackers from store (dynamic list)
+    const storedRepackers = store.get('repackers') || ['fitgirl', 'elamigos', 'rune', 'empress', 'tenoke', 'dodi'];
+    // Create variations for each repacker (with spaces, hyphens, etc.)
+    const repackerNames = [];
+    storedRepackers.forEach(repacker => {
+        repackerNames.push(repacker);
+        // Add variations
+        if (repacker.includes(' ')) {
+            repackerNames.push(repacker.replace(/\s+/g, '-'));
+            repackerNames.push(repacker.replace(/\s+/g, ''));
+        }
+        if (repacker.includes('-')) {
+            repackerNames.push(repacker.replace(/-/g, ' '));
+            repackerNames.push(repacker.replace(/-/g, ''));
+        }
+        // Add "el amigos" -> "elamigos" variations
+        if (repacker === 'elamigos') {
+            repackerNames.push('el amigos', 'el-amigos');
+        }
+        if (repacker === 'el amigos' || repacker === 'el-amigos') {
+            repackerNames.push('elamigos');
+        }
+        // Add "fitgirl" variations
+        if (repacker === 'fitgirl') {
+            repackerNames.push('fit girl', 'fit-girl');
+        }
+        if (repacker === 'fit girl' || repacker === 'fit-girl') {
+            repackerNames.push('fitgirl');
+        }
+    });
+    // Remove duplicates
+    const uniqueRepackerNames = [...new Set(repackerNames)];
+    
+    let cleanedTitle = title;
+    for (const repacker of uniqueRepackerNames) {
+        // Remove repacker names at the end (case-insensitive, with various separators)
+        const repackerRegex = new RegExp(`[\\s\\-–.]${repacker}(?:[\\s\\-–.]|$)`, 'gi');
+        cleanedTitle = cleanedTitle.replace(repackerRegex, '').trim();
+        // Also try at the very end without separator
+        if (cleanedTitle.toLowerCase().endsWith(repacker.toLowerCase())) {
+            cleanedTitle = cleanedTitle.substring(0, cleanedTitle.length - repacker.length).trim();
+        }
+    }
+    
+    const titleParts = extractGameParts(cleanedTitle);
+    const titleSequelNum = extractSequelNumber(cleanedTitle);
 
     // If we have a target subtitle from SteamGridDB, use it for matching
     if (targetSubtitle) {
@@ -1749,8 +1923,30 @@ export async function searchTorrents(gameName, options = {}) {
     // 1. Initial Search with original query
     await performSearch(queries);
 
-    // 2. Fallback: Specific Repacker Search
-    if (allResults.length === 0) {
+    // Check if we have valid results (with magnetLink or keeplink)
+    let hasValidResults = allResults.some(r => r.magnetLink || r.keeplink);
+
+    // 2. Fallback: Try without special characters if no valid results
+    if (!hasValidResults) {
+        const cleanedQuery = removeSpecialCharacters(searchQuery);
+        console.log(`[TorrentSearch] Debug - Original query: "${searchQuery}", Cleaned: "${cleanedQuery}", Different: ${cleanedQuery !== searchQuery}, Length: ${cleanedQuery.length}`);
+        if (cleanedQuery !== searchQuery && cleanedQuery.length > 0) {
+            console.log(`[TorrentSearch] No valid results found. Trying without special characters: "${cleanedQuery}"`);
+            // Clear previous results before retry
+            allResults.length = 0;
+            seenMagnets.clear();
+            queries = [cleanedQuery];
+            await performSearch(queries);
+            // Check again after retry
+            hasValidResults = allResults.some(r => r.magnetLink || r.keeplink);
+            console.log(`[TorrentSearch] After retry without special chars: ${allResults.length} results, valid: ${hasValidResults}`);
+        } else {
+            console.log(`[TorrentSearch] Skipping special char retry - query unchanged or empty`);
+        }
+    }
+
+    // 3. Fallback: Specific Repacker Search
+    if (!hasValidResults) {
         console.log('[TorrentSearch] No results found. Attempting specific repacker searches...');
         const specificQueries = [];
 

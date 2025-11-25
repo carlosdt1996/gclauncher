@@ -53,6 +53,10 @@ function App() {
   const [confirmationModal, setConfirmationModal] = useState(null);
   const confirmationResolveRef = useRef(null);
 
+  // Add repacker modal
+  const [showAddRepackerModal, setShowAddRepackerModal] = useState(false);
+  const [newRepackerInput, setNewRepackerInput] = useState('');
+
   useEffect(() => {
     themeRef.current = theme;
   }, [theme]);
@@ -84,6 +88,8 @@ function App() {
   const [gameDetails, setGameDetails] = useState(null);
   const [gameDetailsLoading, setGameDetailsLoading] = useState(false);
   const [repackFilter, setRepackFilter] = useState(['fitgirl', 'elamigos', 'rune', 'empress', 'tenoke', 'dodi']);
+  const [availableRepackers, setAvailableRepackers] = useState(['fitgirl', 'elamigos', 'rune', 'empress', 'tenoke', 'dodi']);
+  const [newRepackerName, setNewRepackerName] = useState('');
   const [sortBy, setSortBy] = useState('seeders');
 
   // Gamepad/Controller support
@@ -216,6 +222,12 @@ function App() {
           const iFolder = await window.electronAPI.getInstallFolder();
           setInstallFolder(iFolder || '');
           setTempInstallFolder(iFolder || '');
+
+          // Load repackers list
+          const repackers = await window.electronAPI.getRepackers();
+          setAvailableRepackers(repackers || ['fitgirl', 'elamigos', 'rune', 'empress', 'tenoke', 'dodi']);
+          // Initialize filter with available repackers
+          setRepackFilter(repackers || ['fitgirl', 'elamigos', 'rune', 'empress', 'tenoke', 'dodi']);
 
           // Scan download folder for extracted installers
           try {
@@ -1751,6 +1763,74 @@ function App() {
     await startRealDebridDownload(fitgirlGameDetails.magnetLink, selectedFitgirlGame.title, selectedFitgirlGame.image);
   };
 
+  // Repacker management functions
+  const handleAddRepacker = useCallback(async (repackerName) => {
+    if (!repackerName || !repackerName.trim()) {
+      showToast('Please enter a valid repacker name', 'error');
+      return;
+    }
+    try {
+      if (!window.electronAPI || !window.electronAPI.addRepacker) {
+        console.error('[Frontend] electronAPI.addRepacker not available');
+        showToast('Repacker management not available', 'error');
+        return;
+      }
+      const result = await window.electronAPI.addRepacker(repackerName);
+      if (result && result.success) {
+        setAvailableRepackers(result.repackers);
+        showToast(`Repacker "${repackerName}" added successfully`, 'success');
+        setShowAddRepackerModal(false);
+        setNewRepackerInput('');
+      } else {
+        showToast(result?.error || 'Failed to add repacker', 'error');
+      }
+    } catch (error) {
+      console.error('[Frontend] Error adding repacker:', error);
+      showToast(`Error adding repacker: ${error.message || error}`, 'error');
+    }
+  }, [showToast]);
+
+  const handleOpenAddRepackerModal = useCallback(() => {
+    setNewRepackerInput('');
+    setShowAddRepackerModal(true);
+  }, []);
+
+  const handleCloseAddRepackerModal = useCallback(() => {
+    setShowAddRepackerModal(false);
+    setNewRepackerInput('');
+  }, []);
+
+  const handleSubmitAddRepacker = useCallback(async () => {
+    if (newRepackerInput && newRepackerInput.trim()) {
+      await handleAddRepacker(newRepackerInput.trim());
+    }
+  }, [newRepackerInput, handleAddRepacker]);
+
+  const handleRemoveRepacker = useCallback(async (repackerName) => {
+    if (repackFilter.includes(repackerName)) {
+      const confirmed = await showConfirmation(
+        `Remove "${repackerName}" from repackers? This will also remove it from active filters.`,
+        'Remove Repacker'
+      );
+      if (!confirmed) return;
+    }
+
+    try {
+      const result = await window.electronAPI.removeRepacker(repackerName);
+      if (result.success) {
+        setAvailableRepackers(result.repackers);
+        // Remove from active filter if it was active
+        setRepackFilter(prev => prev.filter(r => r !== repackerName));
+        showToast(`Repacker "${repackerName}" removed successfully`, 'success');
+      } else {
+        showToast(result.error || 'Failed to remove repacker', 'error');
+      }
+    } catch (error) {
+      console.error('[Frontend] Error removing repacker:', error);
+      showToast('Error removing repacker', 'error');
+    }
+  }, [repackFilter, showConfirmation]);
+
   // Torrent Search handlers
   const handleSearchGame = async (query) => {
     if (!query.trim()) {
@@ -3109,8 +3189,8 @@ function App() {
                   alignItems: 'center',
                   justifyContent: 'space-between'
                 }}>
-                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                    {['fitgirl', 'elamigos', 'rune', 'empress', 'tenoke', 'dodi'].map(repacker => (
+                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    {availableRepackers.map(repacker => (
                       <button
                         key={repacker}
                         onClick={() => {
@@ -3128,12 +3208,55 @@ function App() {
                           color: '#fff',
                           cursor: 'pointer',
                           textTransform: 'capitalize',
-                          transition: 'all 0.2s'
+                          transition: 'all 0.2s',
+                          position: 'relative'
                         }}
+                        title={repackFilter.includes(repacker) ? 'Click to disable' : 'Click to enable'}
                       >
                         {repacker}
+                        <span
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRemoveRepacker(repacker);
+                          }}
+                          style={{
+                            position: 'absolute',
+                            top: '-8px',
+                            right: '-8px',
+                            background: '#ff4444',
+                            color: '#fff',
+                            borderRadius: '50%',
+                            width: '20px',
+                            height: '20px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: '12px',
+                            cursor: 'pointer',
+                            border: '2px solid #1a1a1a',
+                            lineHeight: '1'
+                          }}
+                          title="Remove repacker"
+                        >
+                          ×
+                        </span>
                       </button>
                     ))}
+                    <button
+                      onClick={handleOpenAddRepackerModal}
+                      style={{
+                        padding: '8px 16px',
+                        background: 'rgba(102, 126, 234, 0.3)',
+                        border: '1px dashed rgba(255,255,255,0.3)',
+                        borderRadius: '20px',
+                        color: '#fff',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s'
+                      }}
+                      title="Add new repacker"
+                    >
+                      + Add
+                    </button>
                   </div>
 
                   <div>
@@ -3226,9 +3349,9 @@ function App() {
                               {torrent.repacker}
                             </span>
                           </td>
-                          <td style={{ padding: '15px', textAlign: 'center' }}>{torrent.size}</td>
-                          <td style={{ padding: '15px', textAlign: 'center', color: '#4ade80' }}>{torrent.seeders}</td>
-                          <td style={{ padding: '15px', textAlign: 'center', color: '#f87171' }}>{torrent.leechers}</td>
+                          <td style={{ padding: '15px', textAlign: 'center' }}>{torrent.size || 'Unknown'}</td>
+                          <td style={{ padding: '15px', textAlign: 'center', color: '#4ade80' }}>{torrent.seeders ?? 100}</td>
+                          <td style={{ padding: '15px', textAlign: 'center', color: '#f87171' }}>{torrent.leechers ?? 0}</td>
                           <td style={{ padding: '15px', textAlign: 'center', fontSize: '12px', color: 'rgba(255, 255, 255, 0.6)' }}>
                             {torrent.source}
                           </td>
@@ -4382,6 +4505,67 @@ function App() {
           </div>
         ))}
       </div>
+
+      {/* Add Repacker Modal */}
+      {showAddRepackerModal && (
+        <div className="modal-overlay" onClick={handleCloseAddRepackerModal}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '400px' }}>
+            <div className="modal-header">
+              <h2>Add Repacker</h2>
+              <button className="close-btn" onClick={handleCloseAddRepackerModal}>×</button>
+            </div>
+            <div className="modal-body">
+              <label htmlFor="repacker-name">Repacker Name</label>
+              <input
+                id="repacker-name"
+                type="text"
+                value={newRepackerInput}
+                onChange={(e) => setNewRepackerInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    handleSubmitAddRepacker();
+                  } else if (e.key === 'Escape') {
+                    handleCloseAddRepackerModal();
+                  }
+                }}
+                placeholder="Enter repacker name (e.g., codex)"
+                autoFocus
+                style={{
+                  width: '100%',
+                  padding: '12px 16px',
+                  marginBottom: '20px',
+                  borderRadius: '6px',
+                  border: '1px solid #333',
+                  background: '#2a2a2a',
+                  color: '#fff',
+                  fontSize: '1rem'
+                }}
+              />
+              <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                <button
+                  className="btn-secondary"
+                  onClick={handleCloseAddRepackerModal}
+                  style={{ padding: '10px 20px' }}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="btn-primary"
+                  onClick={handleSubmitAddRepacker}
+                  disabled={!newRepackerInput || !newRepackerInput.trim()}
+                  style={{
+                    padding: '10px 20px',
+                    opacity: (!newRepackerInput || !newRepackerInput.trim()) ? 0.5 : 1,
+                    cursor: (!newRepackerInput || !newRepackerInput.trim()) ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  Add
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Confirmation Modal */}
       {confirmationModal && (
