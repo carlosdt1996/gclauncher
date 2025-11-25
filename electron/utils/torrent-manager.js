@@ -57,11 +57,20 @@ class TorrentManager {
                         if (existing.destroyed) return;
                         if (downloadInfo) { 
                              downloadInfo.progress = (existing.progress * 100).toFixed(2);
-                             downloadInfo.downloadSpeed = existing.downloadSpeed;
-                             downloadInfo.uploadSpeed = existing.uploadSpeed;
                              downloadInfo.downloaded = existing.downloaded;
-                             downloadInfo.eta = existing.timeRemaining;
-                             downloadInfo.status = existing.paused ? 'paused' : (existing.done ? 'completed' : 'downloading');
+                             
+                             // Only update speeds and status if torrent is not paused
+                             if (downloadInfo.status === 'paused' || existing.paused) {
+                                 downloadInfo.status = 'paused';
+                                 downloadInfo.downloadSpeed = 0;
+                                 downloadInfo.uploadSpeed = 0;
+                                 downloadInfo.eta = Infinity;
+                             } else {
+                                 downloadInfo.downloadSpeed = existing.downloadSpeed;
+                                 downloadInfo.uploadSpeed = existing.uploadSpeed;
+                                 downloadInfo.eta = existing.timeRemaining;
+                                 downloadInfo.status = existing.done ? 'completed' : 'downloading';
+                             }
                         }
 
                         if (progressCallback) {
@@ -82,6 +91,10 @@ class TorrentManager {
                     };
                     
                     const progressInterval = setInterval(updateProgress, 1000);
+                    // Store interval reference for cleanup
+                    if (!downloadInfo.progressInterval) {
+                        downloadInfo.progressInterval = progressInterval;
+                    }
                     
                     // If already done, make sure we send one update
                     if (existing.done) {
@@ -93,11 +106,22 @@ class TorrentManager {
                     }
 
                     existing.on('done', () => {
-                        if (downloadInfo) downloadInfo.status = 'completed';
+                        if (downloadInfo) {
+                            downloadInfo.status = 'completed';
+                            if (downloadInfo.progressInterval) {
+                                clearInterval(downloadInfo.progressInterval);
+                                downloadInfo.progressInterval = null;
+                            }
+                        }
                         updateProgress();
                     });
                     
-                    existing.on('error', () => clearInterval(progressInterval));
+                    existing.on('error', () => {
+                        if (downloadInfo && downloadInfo.progressInterval) {
+                            clearInterval(downloadInfo.progressInterval);
+                            downloadInfo.progressInterval = null;
+                        }
+                    });
                     
                     // Return serializable info immediately
                     return resolve({
@@ -133,7 +157,8 @@ class TorrentManager {
                     total: torrent.length,
                     eta: Infinity,
                     savePath: path.join(downloadPath, torrent.name),
-                    torrent
+                    torrent,
+                    progressInterval: null
                 };
 
                 this.downloads.set(infoHash, downloadInfo);
@@ -143,10 +168,20 @@ class TorrentManager {
                     if (torrent.destroyed) return;
 
                     downloadInfo.progress = (torrent.progress * 100).toFixed(2);
-                    downloadInfo.downloadSpeed = torrent.downloadSpeed;
-                    downloadInfo.uploadSpeed = torrent.uploadSpeed;
                     downloadInfo.downloaded = torrent.downloaded;
-                    downloadInfo.eta = torrent.timeRemaining;
+                    
+                    // Only update speeds and status if torrent is not paused
+                    if (downloadInfo.status === 'paused' || torrent.paused) {
+                        downloadInfo.status = 'paused';
+                        downloadInfo.downloadSpeed = 0;
+                        downloadInfo.uploadSpeed = 0;
+                        downloadInfo.eta = Infinity;
+                    } else {
+                        downloadInfo.downloadSpeed = torrent.downloadSpeed;
+                        downloadInfo.uploadSpeed = torrent.uploadSpeed;
+                        downloadInfo.eta = torrent.timeRemaining;
+                        downloadInfo.status = torrent.done ? 'completed' : 'downloading';
+                    }
 
                     if (progressCallback) {
                         // Create a serializable object without circular references (like 'torrent')
@@ -167,10 +202,14 @@ class TorrentManager {
                 };
 
                 const progressInterval = setInterval(updateProgress, 1000);
+                downloadInfo.progressInterval = progressInterval;
 
                 torrent.on('done', () => {
                     console.log(`[Torrent] Download complete: ${gameName}`);
-                    clearInterval(progressInterval);
+                    if (downloadInfo.progressInterval) {
+                        clearInterval(downloadInfo.progressInterval);
+                        downloadInfo.progressInterval = null;
+                    }
                     downloadInfo.status = 'completed';
                     downloadInfo.progress = 100;
                     if (progressCallback) progressCallback(downloadInfo);
@@ -179,7 +218,10 @@ class TorrentManager {
 
                 torrent.on('error', (err) => {
                     console.error(`[Torrent] Download error: ${gameName}`, err);
-                    clearInterval(progressInterval);
+                    if (downloadInfo.progressInterval) {
+                        clearInterval(downloadInfo.progressInterval);
+                        downloadInfo.progressInterval = null;
+                    }
                     downloadInfo.status = 'error';
                     downloadInfo.error = err.message;
                     if (progressCallback) progressCallback(downloadInfo);
@@ -211,6 +253,7 @@ class TorrentManager {
             download.status = 'paused';
             download.downloadSpeed = 0;
             download.uploadSpeed = 0;
+            download.eta = Infinity;
             console.log(`[Torrent] Paused: ${download.gameName}`);
             return true;
         }
@@ -221,7 +264,7 @@ class TorrentManager {
         const download = this.downloads.get(infoHash);
         if (download && download.torrent) {
             download.torrent.resume();
-            download.status = 'downloading';
+            download.status = download.torrent.done ? 'completed' : 'downloading';
             console.log(`[Torrent] Resumed: ${download.gameName}`);
             return true;
         }
@@ -231,7 +274,53 @@ class TorrentManager {
     cancelDownload(infoHash) {
         const download = this.downloads.get(infoHash);
         if (download && download.torrent) {
+            // Save paths before destroying torrent
+            const torrentPath = download.torrent.path;
+            const savePath = download.savePath;
+
+            // Clear progress interval
+            if (download.progressInterval) {
+                clearInterval(download.progressInterval);
+                download.progressInterval = null;
+            }
+
+            // Destroy the torrent
             download.torrent.destroy();
+
+            // Delete downloaded files
+            // WebTorrent stores files in torrent.path (which is a directory for multi-file torrents)
+            const pathsToDelete = [];
+            
+            // Prioritize torrent.path (most reliable, set by WebTorrent)
+            if (torrentPath && fs.existsSync(torrentPath)) {
+                pathsToDelete.push(torrentPath);
+            }
+            
+            // Also check savePath (fallback)
+            if (savePath && fs.existsSync(savePath) && savePath !== torrentPath) {
+                pathsToDelete.push(savePath);
+            }
+
+            // Delete all found paths
+            for (const pathToDelete of pathsToDelete) {
+                try {
+                    const stats = fs.statSync(pathToDelete);
+                    if (stats.isDirectory()) {
+                        // Delete entire directory
+                        fs.rmSync(pathToDelete, { recursive: true, force: true });
+                        console.log(`[Torrent] Deleted directory: ${pathToDelete}`);
+                    } else {
+                        // Delete single file
+                        fs.unlinkSync(pathToDelete);
+                        console.log(`[Torrent] Deleted file: ${pathToDelete}`);
+                    }
+                } catch (error) {
+                    console.error(`[Torrent] Error deleting ${pathToDelete}:`, error);
+                    // Continue with other paths even if one fails
+                }
+            }
+
+            // Remove from downloads map
             this.downloads.delete(infoHash);
             console.log(`[Torrent] Cancelled: ${download.gameName}`);
             return true;

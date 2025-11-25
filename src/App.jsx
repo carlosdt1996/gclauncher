@@ -3589,7 +3589,20 @@ function App() {
                       {download.status === 'paused' && (
                         <button onClick={() => window.electronAPI.resumeDownload(download.infoHash)}>Resume</button>
                       )}
-                      <button onClick={() => window.electronAPI.cancelDownload(download.infoHash)}>Cancel</button>
+                      <button onClick={async () => {
+                        try {
+                          await window.electronAPI.cancelDownload(download.infoHash);
+                          // Remove from local state immediately
+                          setDownloads(prev => prev.filter(d => d.infoHash !== download.infoHash));
+                          // Refresh downloads list from backend to ensure consistency
+                          const allDownloads = await window.electronAPI.getAllDownloads();
+                          setDownloads(allDownloads);
+                          showToast(`${download.gameName} cancelled and files deleted`, 'info');
+                        } catch (error) {
+                          console.error('Error cancelling download:', error);
+                          showToast('Failed to cancel download: ' + error.message, 'error');
+                        }
+                      }}>Cancel</button>
                     </div>
                   </div>
                 ))}
