@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
@@ -94,6 +94,31 @@ app.on('ready', async () => {
         return { success: false, error: 'Game already exists' };
     });
 
+    ipcMain.handle('select-executable', async (event, defaultPath) => {
+        if (!mainWindow) return { canceled: true, filePaths: [] };
+        const result = await dialog.showOpenDialog(mainWindow, {
+            defaultPath: defaultPath,
+            properties: ['openFile'],
+            filters: [
+                { name: 'Executables', extensions: ['exe', 'bat', 'cmd', 'lnk'] },
+                { name: 'All Files', extensions: ['*'] }
+            ]
+        });
+        return result;
+    });
+
+    ipcMain.handle('update-game-executable', async (event, { gameId, executablePath }) => {
+        const customGames = store.get('customGames') || [];
+        const gameIndex = customGames.findIndex(g => g.id === gameId);
+
+        if (gameIndex !== -1) {
+            customGames[gameIndex].executable = executablePath;
+            store.set('customGames', customGames);
+            return { success: true };
+        }
+        return { success: false, error: 'Game not found' };
+    });
+
     /**
      * Find uninstaller executables in a directory
      */
@@ -105,16 +130,16 @@ app.on('ready', async () => {
             if (!fs.existsSync(dirPath)) return uninstallers;
 
             const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-            
+
             for (const entry of entries) {
                 const fullPath = path.join(dirPath, entry.name);
-                
+
                 if (entry.isFile()) {
                     const ext = path.extname(entry.name).toLowerCase();
                     if (['.exe', '.bat', '.cmd'].includes(ext)) {
                         const nameLower = entry.name.toLowerCase();
                         // Look for uninstaller patterns
-                        if (nameLower.includes('uninstall') || 
+                        if (nameLower.includes('uninstall') ||
                             nameLower.includes('unins') ||
                             (nameLower.includes('remove') && nameLower.includes('game'))) {
                             uninstallers.push(fullPath);
@@ -123,7 +148,7 @@ app.on('ready', async () => {
                 } else if (entry.isDirectory()) {
                     // Search subdirectories, but skip obvious non-game folders
                     const nameLower = entry.name.toLowerCase();
-                    if (!nameLower.includes('redist') && 
+                    if (!nameLower.includes('redist') &&
                         !nameLower.includes('_redist') &&
                         !nameLower.includes('directx') &&
                         !nameLower.includes('vcredist') &&
@@ -144,7 +169,7 @@ app.on('ready', async () => {
     ipcMain.handle('remove-custom-game', async (event, gameId) => {
         const customGames = store.get('customGames') || [];
         const game = customGames.find(g => g.id === gameId);
-        
+
         if (!game) {
             return { success: false, error: 'Game not found' };
         }
@@ -153,44 +178,44 @@ app.on('ready', async () => {
         if (game.platform === 'custom' && game.installDir && fs.existsSync(game.installDir)) {
             console.log(`[Uninstall] Looking for uninstaller in: ${game.installDir}`);
             const uninstallers = findUninstaller(game.installDir, 3, 0);
-            
+
             if (uninstallers.length > 0) {
                 const uninstallerPath = uninstallers[0]; // Use first found
                 console.log(`[Uninstall] Found uninstaller: ${uninstallerPath}`);
-                
+
                 // Launch the uninstaller
                 console.log('[Uninstall] Launching uninstaller...');
                 await shell.openPath(uninstallerPath);
-                
+
                 // Get the uninstaller process name
                 const uninstallerProcessName = path.basename(uninstallerPath);
-                
+
                 // Wait for uninstaller to finish
                 console.log('[Uninstall] Waiting for uninstaller to finish...');
                 try {
                     await waitForProcessToFinish(uninstallerProcessName);
                     console.log('[Uninstall] Uninstaller finished');
-                    
+
                     // Wait a bit for files to be deleted
                     await new Promise(resolve => setTimeout(resolve, 2000));
-                    
+
                     // Check if game folder still exists
                     const gameFolderExists = fs.existsSync(game.installDir);
-                    
+
                     if (!gameFolderExists) {
                         console.log('[Uninstall] Game folder removed, removing from library');
                         // Remove from library
                         const filtered = customGames.filter(g => g.id !== gameId);
                         store.set('customGames', filtered);
-                        
+
                         // Notify frontend
                         if (mainWindow && !mainWindow.isDestroyed()) {
                             mainWindow.webContents.send('games-updated');
                         }
-                        
-                        return { 
-                            success: true, 
-                            uninstallerUsed: true, 
+
+                        return {
+                            success: true,
+                            uninstallerUsed: true,
                             folderRemoved: true,
                             message: 'Game uninstalled and removed from library'
                         };
@@ -200,14 +225,14 @@ app.on('ready', async () => {
                         // For now, we'll remove from library but note that files remain
                         const filtered = customGames.filter(g => g.id !== gameId);
                         store.set('customGames', filtered);
-                        
+
                         if (mainWindow && !mainWindow.isDestroyed()) {
                             mainWindow.webContents.send('games-updated');
                         }
-                        
-                        return { 
-                            success: true, 
-                            uninstallerUsed: true, 
+
+                        return {
+                            success: true,
+                            uninstallerUsed: true,
                             folderRemoved: false,
                             message: 'Uninstaller finished, but game folder still exists. Removed from library.'
                         };
@@ -215,8 +240,8 @@ app.on('ready', async () => {
                 } catch (error) {
                     console.error('[Uninstall] Error waiting for uninstaller:', error);
                     // Still remove from library if user wants
-                    return { 
-                        success: false, 
+                    return {
+                        success: false,
                         error: `Uninstaller may still be running: ${error.message}`,
                         uninstallerUsed: true
                     };
@@ -226,13 +251,13 @@ app.on('ready', async () => {
                 // No uninstaller found, just remove from library
                 const filtered = customGames.filter(g => g.id !== gameId);
                 store.set('customGames', filtered);
-                
+
                 if (mainWindow && !mainWindow.isDestroyed()) {
                     mainWindow.webContents.send('games-updated');
                 }
-                
-                return { 
-                    success: true, 
+
+                return {
+                    success: true,
                     uninstallerUsed: false,
                     message: 'No uninstaller found. Removed from library only.'
                 };
@@ -241,11 +266,11 @@ app.on('ready', async () => {
             // Steam game or no install directory, just remove from library
             const filtered = customGames.filter(g => g.id !== gameId);
             store.set('customGames', filtered);
-            
+
             if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.send('games-updated');
             }
-            
+
             return { success: true, uninstallerUsed: false };
         }
     });
@@ -375,19 +400,19 @@ app.on('ready', async () => {
                 // For custom games, we should have the executable path
                 if (game.executable) {
                     let executablePath = game.executable;
-                    
+
                     // If executable is just a filename (not a full path), construct the full path
                     if (!path.isAbsolute(executablePath) && game.installDir) {
                         executablePath = path.join(game.installDir, executablePath);
                         console.log(`[Launch] Constructed full executable path: ${executablePath}`);
                     }
-                    
+
                     // Verify the executable exists
                     if (!fs.existsSync(executablePath)) {
                         console.error(`[Launch] Executable not found: ${executablePath}`);
                         return { success: false, error: `Executable not found: ${executablePath}` };
                     }
-                    
+
                     const executableName = path.basename(executablePath);
                     setGameExecutable(game.id, executableName);
                     processMonitor.registerGame(game.id, game.name, executableName);
@@ -657,7 +682,7 @@ app.on('ready', async () => {
                     console.log('[Main] Created output directory:', finalOutputDir);
                 }
             }
-            
+
             console.log('[Main] Final output directory:', finalOutputDir);
             console.log('[Main] Starting extraction...');
 
@@ -982,10 +1007,10 @@ app.on('ready', async () => {
             if (!fs.existsSync(dirPath)) return executables;
 
             const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-            
+
             for (const entry of entries) {
                 const fullPath = path.join(dirPath, entry.name);
-                
+
                 if (entry.isFile()) {
                     const ext = path.extname(entry.name).toLowerCase();
                     // Common game executable extensions
@@ -994,14 +1019,14 @@ app.on('ready', async () => {
                         // More lenient filtering - only skip obvious installers/utilities
                         // Allow "launcher" if it's in the root or game folder (might be the main exe)
                         const isInRootOrGameFolder = currentDepth <= 1;
-                        const isObviousInstaller = nameLower.includes('setup') || 
-                                                   nameLower.includes('installer') ||
-                                                   nameLower.includes('uninstall') ||
-                                                   (nameLower.includes('redist') && !isInRootOrGameFolder);
-                        
+                        const isObviousInstaller = nameLower.includes('setup') ||
+                            nameLower.includes('installer') ||
+                            nameLower.includes('uninstall') ||
+                            (nameLower.includes('redist') && !isInRootOrGameFolder);
+
                         // Only skip launcher if it's clearly not the main game (e.g., in a launcher subfolder)
                         const isLauncherInSubfolder = nameLower.includes('launcher') && currentDepth > 1;
-                        
+
                         if (!isObviousInstaller && !isLauncherInSubfolder) {
                             executables.push(fullPath);
                         }
@@ -1009,16 +1034,16 @@ app.on('ready', async () => {
                 } else if (entry.isDirectory()) {
                     // Skip common non-game directories, but be more lenient
                     const nameLower = entry.name.toLowerCase();
-                    const shouldSkip = nameLower.includes('redist') || 
-                                      nameLower.includes('_redist') ||
-                                      nameLower.includes('directx') ||
-                                      nameLower.includes('vcredist') ||
-                                      nameLower.includes('dotnet') ||
-                                      (nameLower.includes('temp') && currentDepth > 0) ||
-                                      (nameLower.includes('tmp') && currentDepth > 0) ||
-                                      nameLower === 'logs' ||
-                                      nameLower === 'cache';
-                    
+                    const shouldSkip = nameLower.includes('redist') ||
+                        nameLower.includes('_redist') ||
+                        nameLower.includes('directx') ||
+                        nameLower.includes('vcredist') ||
+                        nameLower.includes('dotnet') ||
+                        (nameLower.includes('temp') && currentDepth > 0) ||
+                        (nameLower.includes('tmp') && currentDepth > 0) ||
+                        nameLower === 'logs' ||
+                        nameLower === 'cache';
+
                     if (!shouldSkip) {
                         executables.push(...findExecutables(fullPath, maxDepth, currentDepth + 1));
                     }
@@ -1037,17 +1062,17 @@ app.on('ready', async () => {
     async function mountISO(isoPath) {
         return new Promise((resolve, reject) => {
             console.log('[ISO] Mounting ISO:', isoPath);
-            
+
             // Use PowerShell to mount the ISO
             const psCommand = `$mount = Mount-DiskImage -ImagePath "${isoPath.replace(/"/g, '`"')}" -PassThru; $mount | Get-Volume | Select-Object -ExpandProperty DriveLetter`;
-            
+
             exec(`powershell -Command "${psCommand}"`, (error, stdout, stderr) => {
                 if (error) {
                     console.error('[ISO] Error mounting ISO:', error);
                     reject(new Error(`Failed to mount ISO: ${error.message}`));
                     return;
                 }
-                
+
                 const driveLetter = stdout.trim();
                 if (driveLetter && driveLetter.length === 1) {
                     const drivePath = `${driveLetter}:\\`;
@@ -1071,21 +1096,21 @@ app.on('ready', async () => {
                 resolve(true);
                 return;
             }
-            
+
             console.log('[ISO] Unmounting ISO:', driveLetterOrPath);
-            
+
             let driveLetter = driveLetterOrPath;
             if (driveLetterOrPath.length > 1) {
                 // Extract drive letter from path (e.g., "D:\" -> "D")
                 driveLetter = driveLetterOrPath.charAt(0);
             }
-            
+
             // Use PowerShell to unmount the ISO - improved command that finds the ISO by drive letter
             const psCommand = `$vol = Get-Volume -DriveLetter ${driveLetter} -ErrorAction SilentlyContinue; if ($vol) { $disk = Get-Disk -Number $vol.DriveType; Get-DiskImage | Where-Object { $_.DeviceID -eq $disk.Number } | Dismount-DiskImage -ErrorAction SilentlyContinue; if ($?) { Write-Output "Unmounted" } else { Write-Output "NotMounted" } } else { Write-Output "DriveNotFound" }`;
-            
+
             exec(`powershell -Command "${psCommand}"`, (error, stdout, stderr) => {
                 const output = stdout ? stdout.trim() : '';
-                
+
                 if (error) {
                     console.error('[ISO] Error unmounting ISO:', error);
                     // Try alternative method
@@ -1119,7 +1144,7 @@ app.on('ready', async () => {
      */
     function findSetupInISO(drivePath) {
         const installerNames = ['setup.exe', 'install.exe', 'installer.exe', 'Setup.exe', 'Install.exe'];
-        
+
         // Directories to skip (redistributibles and utilities)
         const skipDirectories = [
             'redist', '_redist', 'redistributables', 'redistributable',
@@ -1134,13 +1159,13 @@ app.on('ready', async () => {
             'temp', 'tmp', 'cache',
             'tools', 'utilities', 'utils'
         ];
-        
+
         // Helper function to check if a directory should be skipped
         function shouldSkipDirectory(dirName) {
             const dirLower = dirName.toLowerCase();
             return skipDirectories.some(skip => dirLower.includes(skip));
         }
-        
+
         // Priority 1: Check root of ISO first (most common location for main installer)
         for (const installerName of installerNames) {
             const testPath = path.join(drivePath, installerName);
@@ -1149,10 +1174,10 @@ app.on('ready', async () => {
                 return testPath;
             }
         }
-        
+
         // Priority 2: Search subdirectories, but skip redistributable folders
         const foundInstallers = [];
-        
+
         try {
             const entries = fs.readdirSync(drivePath, { withFileTypes: true });
             for (const entry of entries) {
@@ -1162,9 +1187,9 @@ app.on('ready', async () => {
                         console.log('[ISO] Skipping redistributable directory:', entry.name);
                         continue;
                     }
-                    
+
                     const subPath = path.join(drivePath, entry.name);
-                    
+
                     // Check for installer in this subdirectory
                     for (const installerName of installerNames) {
                         const testPath = path.join(subPath, installerName);
@@ -1178,7 +1203,7 @@ app.on('ready', async () => {
                             });
                         }
                     }
-                    
+
                     // Check one more level deep (but still skip redistributibles)
                     try {
                         const subEntries = fs.readdirSync(subPath, { withFileTypes: true });
@@ -1188,7 +1213,7 @@ app.on('ready', async () => {
                                 if (shouldSkipDirectory(subEntry.name)) {
                                     continue;
                                 }
-                                
+
                                 const subSubPath = path.join(subPath, subEntry.name);
                                 for (const installerName of installerNames) {
                                     const testPath = path.join(subSubPath, installerName);
@@ -1212,7 +1237,7 @@ app.on('ready', async () => {
         } catch (error) {
             console.error('[ISO] Error searching for installer in ISO:', error);
         }
-        
+
         // If we found multiple installers, prioritize:
         // 1. The largest one (main installer is usually bigger)
         // 2. The one at depth 1 (closer to root)
@@ -1224,14 +1249,14 @@ app.on('ready', async () => {
                 }
                 return a.depth - b.depth; // Shallower first
             });
-            
+
             const selected = foundInstallers[0];
             console.log('[ISO] Selected installer from subdirectory:', selected.path);
             console.log('[ISO]   Size:', (selected.size / 1024 / 1024).toFixed(2), 'MB');
             console.log('[ISO]   Directory:', selected.dirName);
             return selected.path;
         }
-        
+
         return null;
     }
 
@@ -1254,13 +1279,13 @@ app.on('ready', async () => {
         } else {
             return { success: false, error: 'Invalid parameters' };
         }
-        
+
         let drivePath = null;
         try {
             console.log('[ISO] Mounting ISO and looking for installer:', isoPath);
             console.log('[ISO] Output directory to clean:', outputDir);
             console.log('[ISO] Download paths to clean:', downloadPaths);
-            
+
             // Notify frontend: mounting ISO
             if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.send('iso-progress', {
@@ -1268,10 +1293,10 @@ app.on('ready', async () => {
                     message: 'Montando ISO...'
                 });
             }
-            
+
             // Mount the ISO
             drivePath = await mountISO(isoPath);
-            
+
             // Notify frontend: ISO mounted, searching for installer
             if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.send('iso-progress', {
@@ -1280,10 +1305,10 @@ app.on('ready', async () => {
                     drivePath: drivePath
                 });
             }
-            
+
             // Find setup.exe in the mounted ISO
             const installerPath = findSetupInISO(drivePath);
-            
+
             if (!installerPath) {
                 // Unmount before returning error
                 await unmountISO(drivePath);
@@ -1295,9 +1320,9 @@ app.on('ready', async () => {
                 }
                 return { success: false, error: 'No installer found in ISO', drivePath: null };
             }
-            
+
             console.log('[ISO] Launching installer from ISO:', installerPath);
-            
+
             // Notify frontend: installer found, launching
             if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.send('iso-progress', {
@@ -1306,19 +1331,19 @@ app.on('ready', async () => {
                     installerPath: installerPath
                 });
             }
-            
+
             // Launch the installer
             await shell.openPath(installerPath);
-            
+
             // Get the installer process name
             const installerProcessName = path.basename(installerPath);
-            
+
             // Wait for installer to finish
             console.log('[ISO] Waiting for installer to finish...');
             try {
                 await waitForProcessToFinish(installerProcessName);
                 console.log('[ISO] Installer finished successfully');
-                
+
                 // Notify frontend: installation finished
                 if (mainWindow && !mainWindow.isDestroyed()) {
                     mainWindow.webContents.send('iso-progress', {
@@ -1326,10 +1351,10 @@ app.on('ready', async () => {
                         message: 'Instalación completada. Desmontando ISO...'
                     });
                 }
-                
+
                 // Wait a moment before unmounting to ensure installer has fully released resources
                 await new Promise(resolve => setTimeout(resolve, 1000));
-                
+
                 // Unmount the ISO after installation
                 console.log('[ISO] Unmounting ISO after installation...');
                 try {
@@ -1342,7 +1367,7 @@ app.on('ready', async () => {
                     await new Promise(resolve => setTimeout(resolve, 2000));
                     await unmountISO(drivePath);
                 }
-                
+
                 // Clean up downloaded and extracted files
                 console.log('[ISO] Cleaning up downloaded and extracted files...');
                 try {
@@ -1352,14 +1377,14 @@ app.on('ready', async () => {
                         fs.unlinkSync(isoPath);
                         console.log('[ISO] ISO file deleted successfully');
                     }
-                    
+
                     // Delete the output directory (extracted files)
                     if (outputDir && fs.existsSync(outputDir)) {
                         console.log('[ISO] Deleting extracted directory:', outputDir);
                         fs.rmSync(outputDir, { recursive: true, force: true });
                         console.log('[ISO] Extracted directory deleted successfully');
                     }
-                    
+
                     // Delete downloaded files
                     if (downloadPaths && Array.isArray(downloadPaths)) {
                         for (const downloadPath of downloadPaths) {
@@ -1381,17 +1406,17 @@ app.on('ready', async () => {
                             }
                         }
                     }
-                    
+
                     console.log('[ISO] Cleanup completed successfully');
                 } catch (cleanupError) {
                     console.error('[ISO] Error during cleanup:', cleanupError);
                     // Don't fail the whole operation if cleanup fails
                 }
-                
-                return { 
-                    success: true, 
-                    path: installerPath, 
-                    finished: true, 
+
+                return {
+                    success: true,
+                    path: installerPath,
+                    finished: true,
                     drivePath: null,
                     installerExecutable: installerProcessName
                 };
@@ -1400,20 +1425,20 @@ app.on('ready', async () => {
                 // Even if installer is still running, try to unmount after a delay
                 // The user can manually unmount if needed
                 console.log('[ISO] Installer may still be running, will attempt unmount after delay...');
-                
+
                 // Try to unmount after 30 seconds (installer might finish quickly)
                 setTimeout(async () => {
                     try {
                         // Check if installer process is still running
                         exec(`tasklist /FI "IMAGENAME eq ${installerProcessName}" /FO CSV /NH`, async (checkError, checkStdout) => {
                             const isRunning = checkStdout && checkStdout.toLowerCase().includes(installerProcessName.toLowerCase());
-                            
+
                             if (!isRunning) {
                                 console.log('[ISO] Installer process no longer running, unmounting ISO...');
                                 try {
                                     await unmountISO(drivePath);
                                     console.log('[ISO] ISO unmounted after delay');
-                                    
+
                                     // Clean up files after unmounting
                                     try {
                                         if (isoPath && fs.existsSync(isoPath)) {
@@ -1443,7 +1468,7 @@ app.on('ready', async () => {
                                     } catch (cleanupError) {
                                         console.warn('[ISO] Error during delayed cleanup:', cleanupError);
                                     }
-                                    
+
                                     // Notify frontend
                                     if (mainWindow && !mainWindow.isDestroyed()) {
                                         mainWindow.webContents.send('iso-progress', {
@@ -1461,7 +1486,7 @@ app.on('ready', async () => {
                                     try {
                                         await unmountISO(drivePath);
                                         console.log('[ISO] ISO unmounted after extended delay');
-                                        
+
                                         // Clean up files
                                         try {
                                             if (isoPath && fs.existsSync(isoPath)) {
@@ -1504,19 +1529,19 @@ app.on('ready', async () => {
                         }
                     }
                 }, 30000); // 30 seconds
-                
-                return { 
-                    success: true, 
-                    path: installerPath, 
-                    finished: false, 
-                    error: error.message, 
+
+                return {
+                    success: true,
+                    path: installerPath,
+                    finished: false,
+                    error: error.message,
                     drivePath: drivePath,
                     installerExecutable: installerProcessName
                 };
             }
         } catch (error) {
             console.error('[ISO] Error mounting ISO or running installer:', error);
-            
+
             // Try to unmount if ISO was mounted but error occurred
             if (drivePath) {
                 console.log('[ISO] Attempting to unmount ISO after error...');
@@ -1527,7 +1552,7 @@ app.on('ready', async () => {
                     console.warn('[ISO] Could not unmount ISO after error:', unmountError);
                 }
             }
-            
+
             if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.send('iso-progress', {
                     stage: 'error',
@@ -1558,7 +1583,7 @@ app.on('ready', async () => {
     async function waitForProcessToFinish(processName, timeout = 3600000) { // 1 hour timeout
         return new Promise((resolve, reject) => {
             const startTime = Date.now();
-            
+
             const checkProcess = () => {
                 exec(`tasklist /FI "IMAGENAME eq ${processName}" /FO CSV /NH`, (error, stdout) => {
                     if (error) {
@@ -1569,7 +1594,7 @@ app.on('ready', async () => {
                     }
 
                     const isRunning = stdout.toLowerCase().includes(processName.toLowerCase());
-                    
+
                     if (!isRunning) {
                         console.log(`[ProcessMonitor] ${processName} has finished`);
                         resolve(true);
@@ -1662,7 +1687,7 @@ app.on('ready', async () => {
             console.log('[FindExecutables] Scanning folder:', gameFolderPath);
             const executables = findExecutables(gameFolderPath);
             console.log('[FindExecutables] Found executables:', executables);
-            
+
             // Return the first executable found (or all if needed)
             return { success: true, executables, primaryExecutable: executables.length > 0 ? executables[0] : null };
         } catch (error) {
@@ -1683,21 +1708,21 @@ app.on('ready', async () => {
         const customGames = store.get('customGames') || [];
         const existingGameNames = new Set(customGames.map(g => g.name.toLowerCase()));
         const existingGamePaths = new Set(customGames.map(g => g.installDir?.toLowerCase()));
-        
+
         let gamesFound = 0;
         const newGames = [];
 
         try {
             const entries = fs.readdirSync(installFolder, { withFileTypes: true });
-            
+
             for (const entry of entries) {
                 if (!entry.isDirectory()) continue;
-                
+
                 const gameFolderPath = path.join(installFolder, entry.name);
                 const gameName = entry.name;
-                
+
                 // Skip if game already exists
-                if (existingGameNames.has(gameName.toLowerCase()) || 
+                if (existingGameNames.has(gameName.toLowerCase()) ||
                     existingGamePaths.has(gameFolderPath.toLowerCase())) {
                     console.log(`[AutoScan] Skipping existing game: ${gameName}`);
                     continue;
@@ -1705,17 +1730,17 @@ app.on('ready', async () => {
 
                 // Find executables in this folder (increased depth to 5)
                 const executables = findExecutables(gameFolderPath, 5, 0);
-                
+
                 if (executables.length > 0) {
                     // Prefer executables in root or first level, otherwise use first found
                     const rootExecutables = executables.filter(exe => {
                         const relativePath = path.relative(gameFolderPath, exe);
                         return !relativePath.includes(path.sep) || relativePath.split(path.sep).length === 1;
                     });
-                    
+
                     const primaryExecutablePath = rootExecutables.length > 0 ? rootExecutables[0] : executables[0];
                     const primaryExecutable = path.basename(primaryExecutablePath);
-                    
+
                     const newGame = {
                         name: gameName,
                         installDir: gameFolderPath,
@@ -1724,7 +1749,7 @@ app.on('ready', async () => {
                         id: `custom-${Date.now()}-${gamesFound}`,
                         addedAt: Date.now()
                     };
-                    
+
                     newGames.push(newGame);
                     gamesFound++;
                     console.log(`[AutoScan] Found game: ${gameName} (${primaryExecutable})`);
@@ -1741,7 +1766,7 @@ app.on('ready', async () => {
                 const updatedGames = [...customGames, ...newGames];
                 store.set('customGames', updatedGames);
                 console.log(`[AutoScan] Added ${newGames.length} new games to library`);
-                
+
                 // Notify frontend to refresh
                 if (mainWindow && !mainWindow.isDestroyed()) {
                     mainWindow.webContents.send('games-updated');
@@ -1814,7 +1839,7 @@ app.on('ready', async () => {
     ipcMain.handle('scan-download-folder-for-installers', async () => {
         try {
             const downloadFolder = store.get('downloadFolder') || path.join(os.homedir(), 'Downloads', 'FitGirl Repacks');
-            
+
             if (!fs.existsSync(downloadFolder)) {
                 console.log('[ScanInstallers] Download folder does not exist:', downloadFolder);
                 return { success: true, installers: [] };
@@ -1822,18 +1847,18 @@ app.on('ready', async () => {
 
             const installers = [];
             const installerNames = ['setup.exe', 'install.exe', 'installer.exe', 'Setup.exe', 'Install.exe'];
-            
+
             // Get all subdirectories in download folder
             const entries = fs.readdirSync(downloadFolder, { withFileTypes: true });
-            
+
             for (const entry of entries) {
                 if (entry.isDirectory()) {
                     const folderPath = path.join(downloadFolder, entry.name);
-                    
+
                     // Check if this folder contains an installer
                     let hasInstaller = false;
                     let installerPath = null;
-                    
+
                     // Check root of folder
                     for (const installerName of installerNames) {
                         const testPath = path.join(folderPath, installerName);
@@ -1843,7 +1868,7 @@ app.on('ready', async () => {
                             break;
                         }
                     }
-                    
+
                     // If not found in root, check subdirectories (up to 2 levels deep)
                     if (!hasInstaller) {
                         try {
@@ -1851,7 +1876,7 @@ app.on('ready', async () => {
                             for (const subEntry of subEntries) {
                                 if (subEntry.isDirectory()) {
                                     const subPath = path.join(folderPath, subEntry.name);
-                                    
+
                                     // Check root of subdirectory
                                     for (const installerName of installerNames) {
                                         const testPath = path.join(subPath, installerName);
@@ -1861,7 +1886,7 @@ app.on('ready', async () => {
                                             break;
                                         }
                                     }
-                                    
+
                                     // If still not found, check one more level deep
                                     if (!hasInstaller) {
                                         try {
@@ -1884,7 +1909,7 @@ app.on('ready', async () => {
                                             // Ignore errors in deeper levels
                                         }
                                     }
-                                    
+
                                     if (hasInstaller) break;
                                 }
                             }
@@ -1892,7 +1917,7 @@ app.on('ready', async () => {
                             console.error(`[ScanInstallers] Error scanning subdirectory ${folderPath}:`, error);
                         }
                     }
-                    
+
                     if (hasInstaller) {
                         installers.push({
                             folderPath: installerPath,
@@ -1903,7 +1928,7 @@ app.on('ready', async () => {
                     }
                 }
             }
-            
+
             return { success: true, installers };
         } catch (error) {
             console.error('[ScanInstallers] Error scanning download folder:', error);

@@ -40,6 +40,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Custom Games & Installer
     addCustomGame: (game) => ipcRenderer.invoke('add-custom-game', game),
     removeCustomGame: (gameId) => ipcRenderer.invoke('remove-custom-game', gameId),
+    selectExecutable: (defaultPath) => ipcRenderer.invoke('select-executable', defaultPath),
+    updateGameExecutable: (gameId, executablePath) => ipcRenderer.invoke('update-game-executable', { gameId, executablePath }),
     runInstaller: (folderPath) => ipcRenderer.invoke('run-installer', folderPath),
     findGameExecutables: (gameFolderPath) => ipcRenderer.invoke('find-game-executables', gameFolderPath),
     scanInstallFolder: () => ipcRenderer.invoke('scan-install-folder'),

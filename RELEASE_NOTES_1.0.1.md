@@ -57,3 +57,11 @@ Si encuentras algún problema, por favor:
 **¡Gracias por usar GC Game Launcher!** 🎉
 
 
+
+
+
+
+
+
+
+

@@ -405,6 +405,45 @@ export function isArchive(filePath) {
 }
 
 /**
+ * Find ISO files in a directory
+ */
+export function findISO(directoryPath) {
+    console.log('[findISO] Searching for ISO files in directory:', directoryPath);
+
+    if (!fs.existsSync(directoryPath)) {
+        console.log('[findISO] Directory does not exist');
+        return null;
+    }
+
+    const files = fs.readdirSync(directoryPath);
+    console.log('[findISO] Total files in directory:', files.length);
+
+    const isoFiles = files.filter(f => {
+        const ext = path.extname(f).toLowerCase();
+        return ext === '.iso';
+    });
+
+    console.log('[findISO] ISO files found:', isoFiles.length, isoFiles);
+
+    if (isoFiles.length === 0) return null;
+
+    // Filter out samples
+    const noSamples = isoFiles.filter(f => !f.toLowerCase().includes('sample'));
+    if (noSamples.length === 0) return null;
+
+    // Sort by size (largest first) to get the main ISO
+    noSamples.sort((a, b) => {
+        const statA = fs.statSync(path.join(directoryPath, a));
+        const statB = fs.statSync(path.join(directoryPath, b));
+        return statB.size - statA.size;
+    });
+
+    const selectedISO = path.join(directoryPath, noSamples[0]);
+    console.log('[findISO] Selected ISO file:', noSamples[0]);
+    return selectedISO;
+}
+
+/**
  * Find the main archive file in a directory
  * Prioritizes .rar files, handles multi-part archives, and ignores samples
  */
