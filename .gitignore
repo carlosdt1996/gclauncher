@@ -16,6 +16,10 @@ dist
 dist-build
 dist-ssr
 build
+!build/installer.nsh
+!build/wireguard/
+!build/wireguard/README.md
+!build/wireguard/.gitkeep
 out
 *.local
 
