@@ -20,6 +20,7 @@
     "cheerio": "^1.1.2",
     "electron-squirrel-startup": "^1.0.1",
     "electron-store": "^11.0.2",
+    "electron-updater": "^6.6.2",
     "howlongtobeat-api": "^1.0.3",
     "jdownloader-api": "^1.1.4",
     "node-7z": "^3.0.0",
@@ -107,6 +108,13 @@
       "selectPerMachineByDefault": true,
       "uninstallerIcon": null,
       "installerIcon": null
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "carlosdt1996",
+        "repo": "gclauncher"
+      }
+    ]
   }
 }

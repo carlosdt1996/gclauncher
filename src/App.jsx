@@ -53,9 +53,12 @@ function App() {
   const [confirmationModal, setConfirmationModal] = useState(null);
   const confirmationResolveRef = useRef(null);
 
-  // Add repacker modal
-  const [showAddRepackerModal, setShowAddRepackerModal] = useState(false);
-  const [newRepackerInput, setNewRepackerInput] = useState('');
+  // Update system
+  const [updateAvailable, setUpdateAvailable] = useState(null);
+  const [updateDownloading, setUpdateDownloading] = useState(false);
+  const [updateDownloadProgress, setUpdateDownloadProgress] = useState(0);
+  const [updateDownloaded, setUpdateDownloaded] = useState(false);
+  const [appVersion, setAppVersion] = useState('');
 
   useEffect(() => {
     themeRef.current = theme;
@@ -88,8 +91,6 @@ function App() {
   const [gameDetails, setGameDetails] = useState(null);
   const [gameDetailsLoading, setGameDetailsLoading] = useState(false);
   const [repackFilter, setRepackFilter] = useState(['fitgirl', 'elamigos', 'rune', 'empress', 'tenoke', 'dodi']);
-  const [availableRepackers, setAvailableRepackers] = useState(['fitgirl', 'elamigos', 'rune', 'empress', 'tenoke', 'dodi']);
-  const [newRepackerName, setNewRepackerName] = useState('');
   const [sortBy, setSortBy] = useState('seeders');
 
   // Gamepad/Controller support
@@ -223,12 +224,6 @@ function App() {
           setInstallFolder(iFolder || '');
           setTempInstallFolder(iFolder || '');
 
-          // Load repackers list
-          const repackers = await window.electronAPI.getRepackers();
-          setAvailableRepackers(repackers || ['fitgirl', 'elamigos', 'rune', 'empress', 'tenoke', 'dodi']);
-          // Initialize filter with available repackers
-          setRepackFilter(repackers || ['fitgirl', 'elamigos', 'rune', 'empress', 'tenoke', 'dodi']);
-
           // Scan download folder for extracted installers
           try {
             console.log('[Frontend] Scanning download folder for installers...');
@@ -331,6 +326,49 @@ function App() {
           // Load all playtime data
           const allPlaytimes = await window.electronAPI.getAllPlaytimes();
           setPlaytimeData(allPlaytimes);
+
+          // Get app version
+          if (window.electronAPI.getAppVersion) {
+            const version = await window.electronAPI.getAppVersion();
+            setAppVersion(version);
+          }
+
+          // Set up update listeners
+          if (window.electronAPI.onUpdateAvailable) {
+            window.electronAPI.onUpdateAvailable((info) => {
+              console.log('[Frontend] Update available:', info);
+              setUpdateAvailable(info);
+            });
+          }
+
+          if (window.electronAPI.onUpdateNotAvailable) {
+            window.electronAPI.onUpdateNotAvailable(() => {
+              console.log('[Frontend] No updates available');
+            });
+          }
+
+          if (window.electronAPI.onUpdateError) {
+            window.electronAPI.onUpdateError((error) => {
+              console.error('[Frontend] Update error:', error);
+              showToast(`Error al verificar actualizaciones: ${error.message}`, 'error');
+            });
+          }
+
+          if (window.electronAPI.onUpdateDownloadProgress) {
+            window.electronAPI.onUpdateDownloadProgress((progress) => {
+              console.log('[Frontend] Update download progress:', progress);
+              setUpdateDownloadProgress(progress.percent);
+            });
+          }
+
+          if (window.electronAPI.onUpdateDownloaded) {
+            window.electronAPI.onUpdateDownloaded((info) => {
+              console.log('[Frontend] Update downloaded:', info);
+              setUpdateDownloaded(true);
+              setUpdateDownloading(false);
+              setUpdateAvailable(info);
+            });
+          }
 
           console.log('FRONTEND: Fetching games...');
           const fetchedGames = await window.electronAPI.getGames();
@@ -1763,74 +1801,6 @@ function App() {
     await startRealDebridDownload(fitgirlGameDetails.magnetLink, selectedFitgirlGame.title, selectedFitgirlGame.image);
   };
 
-  // Repacker management functions
-  const handleAddRepacker = useCallback(async (repackerName) => {
-    if (!repackerName || !repackerName.trim()) {
-      showToast('Please enter a valid repacker name', 'error');
-      return;
-    }
-    try {
-      if (!window.electronAPI || !window.electronAPI.addRepacker) {
-        console.error('[Frontend] electronAPI.addRepacker not available');
-        showToast('Repacker management not available', 'error');
-        return;
-      }
-      const result = await window.electronAPI.addRepacker(repackerName);
-      if (result && result.success) {
-        setAvailableRepackers(result.repackers);
-        showToast(`Repacker "${repackerName}" added successfully`, 'success');
-        setShowAddRepackerModal(false);
-        setNewRepackerInput('');
-      } else {
-        showToast(result?.error || 'Failed to add repacker', 'error');
-      }
-    } catch (error) {
-      console.error('[Frontend] Error adding repacker:', error);
-      showToast(`Error adding repacker: ${error.message || error}`, 'error');
-    }
-  }, [showToast]);
-
-  const handleOpenAddRepackerModal = useCallback(() => {
-    setNewRepackerInput('');
-    setShowAddRepackerModal(true);
-  }, []);
-
-  const handleCloseAddRepackerModal = useCallback(() => {
-    setShowAddRepackerModal(false);
-    setNewRepackerInput('');
-  }, []);
-
-  const handleSubmitAddRepacker = useCallback(async () => {
-    if (newRepackerInput && newRepackerInput.trim()) {
-      await handleAddRepacker(newRepackerInput.trim());
-    }
-  }, [newRepackerInput, handleAddRepacker]);
-
-  const handleRemoveRepacker = useCallback(async (repackerName) => {
-    if (repackFilter.includes(repackerName)) {
-      const confirmed = await showConfirmation(
-        `Remove "${repackerName}" from repackers? This will also remove it from active filters.`,
-        'Remove Repacker'
-      );
-      if (!confirmed) return;
-    }
-
-    try {
-      const result = await window.electronAPI.removeRepacker(repackerName);
-      if (result.success) {
-        setAvailableRepackers(result.repackers);
-        // Remove from active filter if it was active
-        setRepackFilter(prev => prev.filter(r => r !== repackerName));
-        showToast(`Repacker "${repackerName}" removed successfully`, 'success');
-      } else {
-        showToast(result.error || 'Failed to remove repacker', 'error');
-      }
-    } catch (error) {
-      console.error('[Frontend] Error removing repacker:', error);
-      showToast('Error removing repacker', 'error');
-    }
-  }, [repackFilter, showConfirmation]);
-
   // Torrent Search handlers
   const handleSearchGame = async (query) => {
     if (!query.trim()) {
@@ -3189,8 +3159,8 @@ function App() {
                   alignItems: 'center',
                   justifyContent: 'space-between'
                 }}>
-                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-                    {availableRepackers.map(repacker => (
+                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                    {['fitgirl', 'elamigos', 'rune', 'empress', 'tenoke', 'dodi'].map(repacker => (
                       <button
                         key={repacker}
                         onClick={() => {
@@ -3208,55 +3178,12 @@ function App() {
                           color: '#fff',
                           cursor: 'pointer',
                           textTransform: 'capitalize',
-                          transition: 'all 0.2s',
-                          position: 'relative'
+                          transition: 'all 0.2s'
                         }}
-                        title={repackFilter.includes(repacker) ? 'Click to disable' : 'Click to enable'}
                       >
                         {repacker}
-                        <span
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleRemoveRepacker(repacker);
-                          }}
-                          style={{
-                            position: 'absolute',
-                            top: '-8px',
-                            right: '-8px',
-                            background: '#ff4444',
-                            color: '#fff',
-                            borderRadius: '50%',
-                            width: '20px',
-                            height: '20px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontSize: '12px',
-                            cursor: 'pointer',
-                            border: '2px solid #1a1a1a',
-                            lineHeight: '1'
-                          }}
-                          title="Remove repacker"
-                        >
-                          ×
-                        </span>
                       </button>
                     ))}
-                    <button
-                      onClick={handleOpenAddRepackerModal}
-                      style={{
-                        padding: '8px 16px',
-                        background: 'rgba(102, 126, 234, 0.3)',
-                        border: '1px dashed rgba(255,255,255,0.3)',
-                        borderRadius: '20px',
-                        color: '#fff',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s'
-                      }}
-                      title="Add new repacker"
-                    >
-                      + Add
-                    </button>
                   </div>
 
                   <div>
@@ -4506,67 +4433,6 @@ function App() {
         ))}
       </div>
 
-      {/* Add Repacker Modal */}
-      {showAddRepackerModal && (
-        <div className="modal-overlay" onClick={handleCloseAddRepackerModal}>
-          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '400px' }}>
-            <div className="modal-header">
-              <h2>Add Repacker</h2>
-              <button className="close-btn" onClick={handleCloseAddRepackerModal}>×</button>
-            </div>
-            <div className="modal-body">
-              <label htmlFor="repacker-name">Repacker Name</label>
-              <input
-                id="repacker-name"
-                type="text"
-                value={newRepackerInput}
-                onChange={(e) => setNewRepackerInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    handleSubmitAddRepacker();
-                  } else if (e.key === 'Escape') {
-                    handleCloseAddRepackerModal();
-                  }
-                }}
-                placeholder="Enter repacker name (e.g., codex)"
-                autoFocus
-                style={{
-                  width: '100%',
-                  padding: '12px 16px',
-                  marginBottom: '20px',
-                  borderRadius: '6px',
-                  border: '1px solid #333',
-                  background: '#2a2a2a',
-                  color: '#fff',
-                  fontSize: '1rem'
-                }}
-              />
-              <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-                <button
-                  className="btn-secondary"
-                  onClick={handleCloseAddRepackerModal}
-                  style={{ padding: '10px 20px' }}
-                >
-                  Cancel
-                </button>
-                <button
-                  className="btn-primary"
-                  onClick={handleSubmitAddRepacker}
-                  disabled={!newRepackerInput || !newRepackerInput.trim()}
-                  style={{
-                    padding: '10px 20px',
-                    opacity: (!newRepackerInput || !newRepackerInput.trim()) ? 0.5 : 1,
-                    cursor: (!newRepackerInput || !newRepackerInput.trim()) ? 'not-allowed' : 'pointer'
-                  }}
-                >
-                  Add
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Confirmation Modal */}
       {confirmationModal && (
         <div className="modal-overlay" onClick={() => handleConfirmation(false)}>
@@ -4584,6 +4450,115 @@ function App() {
               <button className="btn-primary" onClick={() => handleConfirmation(true)}>
                 Confirm
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Update Available Modal */}
+      {updateAvailable && (
+        <div className="modal-overlay">
+          <div className="modal update-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>Actualización Disponible</h2>
+            </div>
+            <div className="modal-body">
+              <p>
+                Hay una nueva versión disponible: <strong>v{updateAvailable.version}</strong>
+              </p>
+              {appVersion && (
+                <p style={{ color: '#888', fontSize: '0.9em' }}>
+                  Versión actual: v{appVersion}
+                </p>
+              )}
+              {updateAvailable.releaseNotes && (
+                <div style={{ marginTop: '15px', maxHeight: '200px', overflowY: 'auto' }}>
+                  <strong>Notas de la versión:</strong>
+                  <div style={{ marginTop: '10px', whiteSpace: 'pre-line', fontSize: '0.9em' }}>
+                    {updateAvailable.releaseNotes}
+                  </div>
+                </div>
+              )}
+              {updateDownloading && (
+                <div style={{ marginTop: '15px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+                    <span>Descargando actualización...</span>
+                    <span>{updateDownloadProgress}%</span>
+                  </div>
+                  <div style={{ width: '100%', height: '20px', backgroundColor: '#333', borderRadius: '10px', overflow: 'hidden' }}>
+                    <div
+                      style={{
+                        width: `${updateDownloadProgress}%`,
+                        height: '100%',
+                        backgroundColor: '#4CAF50',
+                        transition: 'width 0.3s ease'
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+              {updateDownloaded && (
+                <div style={{ marginTop: '15px', padding: '10px', backgroundColor: '#2d5a2d', borderRadius: '5px' }}>
+                  <p style={{ margin: 0, color: '#4CAF50' }}>
+                    ✓ Actualización descargada. Se instalará al reiniciar la aplicación.
+                  </p>
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              {!updateDownloaded && !updateDownloading && (
+                <>
+                  <button
+                    className="btn-secondary"
+                    onClick={() => {
+                      setUpdateAvailable(null);
+                    }}
+                  >
+                    Más tarde
+                  </button>
+                  <button
+                    className="btn-primary"
+                    onClick={async () => {
+                      setUpdateDownloading(true);
+                      try {
+                        await window.electronAPI.downloadUpdate();
+                      } catch (error) {
+                        console.error('[Frontend] Error downloading update:', error);
+                        showToast('Error al descargar la actualización', 'error');
+                        setUpdateDownloading(false);
+                      }
+                    }}
+                  >
+                    Descargar actualización
+                  </button>
+                </>
+              )}
+              {updateDownloaded && (
+                <>
+                  <button
+                    className="btn-secondary"
+                    onClick={() => {
+                      setUpdateAvailable(null);
+                      setUpdateDownloaded(false);
+                    }}
+                  >
+                    Más tarde
+                  </button>
+                  <button
+                    className="btn-primary"
+                    onClick={async () => {
+                      try {
+                        await window.electronAPI.installUpdate();
+                      } catch (error) {
+                        console.error('[Frontend] Error installing update:', error);
+                        showToast('Error al instalar la actualización', 'error');
+                      }
+                    }}
+                  >
+                    Instalar y reiniciar
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>

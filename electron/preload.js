@@ -78,9 +78,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Window controls
     toggleFullscreen: () => ipcRenderer.invoke('toggle-fullscreen'),
     restoreAndFocusWindow: () => ipcRenderer.invoke('restore-and-focus-window'),
-    // Repacker management
-    getRepackers: () => ipcRenderer.invoke('get-repackers'),
-    addRepacker: (repacker) => ipcRenderer.invoke('add-repacker', repacker),
-    removeRepacker: (repacker) => ipcRenderer.invoke('remove-repacker', repacker),
-    setRepackers: (repackers) => ipcRenderer.invoke('set-repackers', repackers),
+    // Update system
+    checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+    downloadUpdate: () => ipcRenderer.invoke('download-update'),
+    installUpdate: () => ipcRenderer.invoke('install-update'),
+    getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+    onUpdateAvailable: (callback) => ipcRenderer.on('update-available', (event, data) => callback(data)),
+    onUpdateNotAvailable: (callback) => ipcRenderer.on('update-not-available', callback),
+    onUpdateError: (callback) => ipcRenderer.on('update-error', (event, data) => callback(data)),
+    onUpdateDownloadProgress: (callback) => ipcRenderer.on('update-download-progress', (event, data) => callback(data)),
+    onUpdateDownloaded: (callback) => ipcRenderer.on('update-downloaded', (event, data) => callback(data)),
 });

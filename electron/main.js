@@ -2,6 +2,8 @@ import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
+import pkg from 'electron-updater';
+const { autoUpdater } = pkg;
 import { getSteamGames } from './utils/steam.js';
 import store from './utils/store.js';
 import { fetchGameImage, searchGameDetailed } from './utils/steamgriddb.js';
@@ -315,51 +317,6 @@ app.on('ready', async () => {
 
     ipcMain.handle('get-install-folder', async () => {
         return store.get('installFolder') || '';
-    });
-
-    // Repacker management handlers
-    ipcMain.handle('get-repackers', () => {
-        const repackers = store.get('repackers');
-        // Default repackers if not set
-        if (!repackers || !Array.isArray(repackers) || repackers.length === 0) {
-            const defaultRepackers = ['fitgirl', 'elamigos', 'rune', 'empress', 'tenoke', 'dodi'];
-            store.set('repackers', defaultRepackers);
-            return defaultRepackers;
-        }
-        return repackers;
-    });
-
-    ipcMain.handle('add-repacker', (event, repacker) => {
-        const repackers = store.get('repackers') || [];
-        const repackerLower = repacker.toLowerCase().trim();
-        if (repackerLower && !repackers.includes(repackerLower)) {
-            repackers.push(repackerLower);
-            store.set('repackers', repackers);
-            console.log(`[Repackers] Added repacker: ${repackerLower}`);
-            return { success: true, repackers };
-        }
-        return { success: false, error: 'Repacker already exists or invalid name', repackers };
-    });
-
-    ipcMain.handle('remove-repacker', (event, repacker) => {
-        const repackers = store.get('repackers') || [];
-        const repackerLower = repacker.toLowerCase().trim();
-        const filtered = repackers.filter(r => r !== repackerLower);
-        if (filtered.length !== repackers.length) {
-            store.set('repackers', filtered);
-            console.log(`[Repackers] Removed repacker: ${repackerLower}`);
-            return { success: true, repackers: filtered };
-        }
-        return { success: false, error: 'Repacker not found', repackers };
-    });
-
-    ipcMain.handle('set-repackers', (event, repackers) => {
-        if (Array.isArray(repackers)) {
-            store.set('repackers', repackers.map(r => r.toLowerCase().trim()));
-            console.log(`[Repackers] Set repackers: ${repackers.join(', ')}`);
-            return { success: true };
-        }
-        return { success: false, error: 'Invalid repackers array' };
     });
 
     ipcMain.handle('get-game-image', async (event, gameNameOrId, gameName) => {
@@ -2130,7 +2087,149 @@ app.on('ready', async () => {
             }
         }
     }, 3000); // Wait 3 seconds after app initialization
+
+    // Initialize auto-updater (only in production)
+    if (app.isPackaged) {
+        console.log('[Updater] Initializing auto-updater...');
+        setupAutoUpdater();
+    } else {
+        console.log('[Updater] Skipping auto-updater in development mode');
+    }
+
+    // IPC Handlers for updates
+    ipcMain.handle('check-for-updates', async () => {
+        if (!app.isPackaged) {
+            return { success: false, error: 'Updates only available in production builds' };
+        }
+        try {
+            const result = await autoUpdater.checkForUpdates();
+            return { success: true, updateInfo: result?.updateInfo };
+        } catch (error) {
+            console.error('[Updater] Error in check-for-updates handler:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    // Start download
+    ipcMain.handle('download-update', async () => {
+        if (!app.isPackaged) {
+            return { success: false, error: 'Updates only available in production builds' };
+        }
+        try {
+            await autoUpdater.downloadUpdate();
+            return { success: true };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    });
+
+    // Install and restart
+    ipcMain.handle('install-update', async () => {
+        if (!app.isPackaged) {
+            return { success: false, error: 'Updates only available in production builds' };
+        }
+        try {
+            autoUpdater.quitAndInstall(false, true); // Don't force, but restart after install
+            return { success: true };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    });
+
+    // Get current version
+    ipcMain.handle('get-app-version', () => {
+        return app.getVersion();
+    });
 });
+
+// Auto-updater setup
+function setupAutoUpdater() {
+    // Configure auto-updater
+    autoUpdater.autoDownload = false; // Don't auto-download, ask user first
+    autoUpdater.autoInstallOnAppQuit = true; // Install on quit after download
+    
+    // Set update channel (optional, defaults to 'latest')
+    autoUpdater.channel = 'latest';
+    
+    // Configure logger for debugging
+    autoUpdater.logger = {
+        info: (message) => console.log('[Updater]', message),
+        warn: (message) => console.warn('[Updater]', message),
+        error: (message) => console.error('[Updater]', message),
+    };
+    
+    // Note: electron-updater automatically uses the publish configuration from package.json
+    // It will check GitHub releases at: https://github.com/carlosdt1996/gclauncher/releases
+    // Make sure to publish the latest.yml and the installer .exe file in each GitHub release
+
+    // Check for updates on startup (after a delay)
+    setTimeout(() => {
+        console.log('[Updater] Checking for updates...');
+        autoUpdater.checkForUpdates().catch(err => {
+            console.error('[Updater] Error checking for updates:', err);
+        });
+    }, 5000); // Wait 5 seconds after app start
+
+    // Check for updates every 4 hours
+    setInterval(() => {
+        console.log('[Updater] Periodic update check...');
+        autoUpdater.checkForUpdates().catch(err => {
+            console.error('[Updater] Error in periodic check:', err);
+        });
+    }, 4 * 60 * 60 * 1000); // 4 hours
+
+    // Event: Update available
+    autoUpdater.on('update-available', (info) => {
+        console.log('[Updater] Update available:', info.version);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('update-available', {
+                version: info.version,
+                releaseDate: info.releaseDate,
+                releaseNotes: info.releaseNotes
+            });
+        }
+    });
+
+    // Event: Update not available
+    autoUpdater.on('update-not-available', () => {
+        console.log('[Updater] No updates available');
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('update-not-available');
+        }
+    });
+
+    // Event: Error checking for updates
+    autoUpdater.on('error', (error) => {
+        console.error('[Updater] Error checking for updates:', error);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('update-error', { message: error.message });
+        }
+    });
+
+    // Event: Download progress
+    autoUpdater.on('download-progress', (progress) => {
+        console.log('[Updater] Download progress:', Math.round(progress.percent), '%');
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('update-download-progress', {
+                percent: Math.round(progress.percent),
+                transferred: progress.transferred,
+                total: progress.total
+            });
+        }
+    });
+
+    // Event: Update downloaded
+    autoUpdater.on('update-downloaded', (info) => {
+        console.log('[Updater] Update downloaded:', info.version);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('update-downloaded', {
+                version: info.version,
+                releaseDate: info.releaseDate,
+                releaseNotes: info.releaseNotes
+            });
+        }
+    });
+}
 
 // Quit when all windows are closed, except on macOS.
 app.on('window-all-closed', () => {
