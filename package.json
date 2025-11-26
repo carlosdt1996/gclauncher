@@ -1,7 +1,7 @@
 {
   "name": "gclauncher",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "A game launcher that has the ability to download games from torrent and integrate them to the library",
   "author": "GC Launcher",
   "main": "electron/main.js",
