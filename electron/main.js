@@ -319,6 +319,91 @@ app.on('ready', async () => {
         return store.get('installFolder') || '';
     });
 
+    // WireGuard Configuration handlers
+    ipcMain.handle('set-wireguard-config-path', async (event, filePath) => {
+        try {
+            // Validate that the file exists and is a .conf file
+            if (!fs.existsSync(filePath)) {
+                return { success: false, error: 'File does not exist' };
+            }
+
+            const ext = path.extname(filePath).toLowerCase();
+            if (ext !== '.conf') {
+                return { success: false, error: 'File must be a .conf file' };
+            }
+
+            // Read and validate the config file
+            const configContent = fs.readFileSync(filePath, 'utf-8');
+            
+            // Basic validation - check if it looks like a WireGuard config
+            if (!configContent.includes('[Interface]') && !configContent.includes('[Peer]')) {
+                return { success: false, error: 'File does not appear to be a valid WireGuard configuration' };
+            }
+
+            // Store the config path
+            store.set('wireguardConfigPath', filePath);
+            console.log('[WireGuard] Config path saved:', filePath);
+            return { success: true };
+        } catch (error) {
+            console.error('[WireGuard] Error setting config path:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('get-wireguard-config-path', async () => {
+        return store.get('wireguardConfigPath') || '';
+    });
+
+    ipcMain.handle('remove-wireguard-config', async () => {
+        try {
+            store.delete('wireguardConfigPath');
+            console.log('[WireGuard] Config path removed');
+            return { success: true };
+        } catch (error) {
+            console.error('[WireGuard] Error removing config:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
+    ipcMain.handle('select-wireguard-config-file', async () => {
+        if (!mainWindow) return { canceled: true, filePaths: [] };
+        const result = await dialog.showOpenDialog(mainWindow, {
+            properties: ['openFile'],
+            filters: [
+                { name: 'WireGuard Config', extensions: ['conf'] },
+                { name: 'All Files', extensions: ['*'] }
+            ],
+            title: 'Select WireGuard Configuration File'
+        });
+        return result;
+    });
+
+    ipcMain.handle('handle-dropped-wireguard-file', async (event, { fileName, fileContent }) => {
+        try {
+            // Save the dropped file to a temporary location
+            const tempDir = path.join(os.tmpdir(), 'gclauncher-wireguard');
+            if (!fs.existsSync(tempDir)) {
+                fs.mkdirSync(tempDir, { recursive: true });
+            }
+
+            const tempFilePath = path.join(tempDir, fileName);
+            fs.writeFileSync(tempFilePath, fileContent, 'utf-8');
+
+            // Validate the config
+            if (!fileContent.includes('[Interface]') && !fileContent.includes('[Peer]')) {
+                return { success: false, error: 'File does not appear to be a valid WireGuard configuration' };
+            }
+
+            // Store the config path
+            store.set('wireguardConfigPath', tempFilePath);
+            console.log('[WireGuard] Dropped config saved to:', tempFilePath);
+            return { success: true, filePath: tempFilePath };
+        } catch (error) {
+            console.error('[WireGuard] Error handling dropped file:', error);
+            return { success: false, error: error.message };
+        }
+    });
+
     ipcMain.handle('get-game-image', async (event, gameNameOrId, gameName) => {
         const apiKey = store.get('apiKey');
         if (!apiKey) {

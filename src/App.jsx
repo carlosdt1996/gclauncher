@@ -34,6 +34,9 @@ function App() {
   const [rdDownloads, setRdDownloads] = useState([]);
   const [virustotalApiKey, setVirustotalApiKey] = useState('');
   const [tempVirustotalApiKey, setTempVirustotalApiKey] = useState('');
+  const [wireguardConfigPath, setWireguardConfigPath] = useState('');
+  const [wireguardConfigName, setWireguardConfigName] = useState('');
+  const [isDraggingWireguard, setIsDraggingWireguard] = useState(false);
   const [theme, setTheme] = useState('pc'); // 'pc' or 'tv'
   const themeRef = useRef('pc');
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -4253,6 +4256,150 @@ function App() {
                   >
                     🔬 Diagnose Game Folder
                   </button>
+                </div>
+              </div>
+
+              <div className="settings-section" style={{ marginTop: '20px', borderTop: '1px solid #333', paddingTop: '20px' }}>
+                <h3 style={{ fontSize: '1rem', marginBottom: '10px' }}>WireGuard Configuration</h3>
+                <div className="setting-group">
+                  <label>WireGuard Config File (.conf):</label>
+                  <div
+                    className={`drag-drop-area ${isDraggingWireguard ? 'dragging' : ''}`}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setIsDraggingWireguard(true);
+                    }}
+                    onDragLeave={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setIsDraggingWireguard(false);
+                    }}
+                    onDrop={async (e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setIsDraggingWireguard(false);
+
+                      const files = Array.from(e.dataTransfer.files);
+                      const confFile = files.find(f => f.name.endsWith('.conf'));
+
+                      if (confFile) {
+                        try {
+                          // In Electron, we can access the file path directly
+                          let filePath = null;
+                          
+                          // Try to get the path from the file object (Electron specific)
+                          if (confFile.path) {
+                            filePath = confFile.path;
+                          } else {
+                            // Fallback: read content and save to temp
+                            const fileContent = await confFile.text();
+                            if (window.electronAPI.handleDroppedWireguardFile) {
+                              const result = await window.electronAPI.handleDroppedWireguardFile(confFile.name, fileContent);
+                              if (result.success) {
+                                filePath = result.filePath;
+                              } else {
+                                showToast('Error: ' + result.error, 'error');
+                                return;
+                              }
+                            } else {
+                              showToast('Por favor, haz clic para seleccionar el archivo', 'info');
+                              return;
+                            }
+                          }
+
+                          // Set the config path
+                          if (filePath && window.electronAPI.setWireguardConfigPath) {
+                            const result = await window.electronAPI.setWireguardConfigPath(filePath);
+                            if (result.success) {
+                              setWireguardConfigPath(filePath);
+                              setWireguardConfigName(confFile.name);
+                              showToast(`Configuración de WireGuard importada: ${confFile.name}`, 'success');
+                            } else {
+                              showToast('Error: ' + result.error, 'error');
+                            }
+                          }
+                        } catch (error) {
+                          console.error('Error importing WireGuard config:', error);
+                          showToast('Error al importar configuración: ' + error.message, 'error');
+                        }
+                      } else {
+                        showToast('Por favor, arrastra un archivo .conf de WireGuard', 'warning');
+                      }
+                    }}
+                    onClick={async () => {
+                      try {
+                        if (window.electronAPI.selectWireguardConfigFile) {
+                          const result = await window.electronAPI.selectWireguardConfigFile();
+                          if (!result.canceled && result.filePaths && result.filePaths.length > 0) {
+                            const filePath = result.filePaths[0];
+                            await window.electronAPI.setWireguardConfigPath(filePath);
+                            setWireguardConfigPath(filePath);
+                            setWireguardConfigName(filePath.split(/[/\\]/).pop() || '');
+                            showToast('Configuración de WireGuard importada', 'success');
+                          }
+                        }
+                      } catch (error) {
+                        console.error('Error selecting WireGuard config:', error);
+                        showToast('Error al seleccionar archivo: ' + error.message, 'error');
+                      }
+                    }}
+                    style={{
+                      border: `2px dashed ${isDraggingWireguard ? '#4CAF50' : '#555'}`,
+                      borderRadius: '8px',
+                      padding: '30px',
+                      textAlign: 'center',
+                      cursor: 'pointer',
+                      backgroundColor: isDraggingWireguard ? '#2d4a2d' : '#1a1a1a',
+                      transition: 'all 0.3s ease',
+                      marginTop: '10px'
+                    }}
+                  >
+                    {wireguardConfigName ? (
+                      <div>
+                        <p style={{ color: '#4CAF50', margin: '0 0 10px 0' }}>
+                          ✓ {wireguardConfigName}
+                        </p>
+                        <p style={{ fontSize: '0.85rem', color: '#888', margin: 0 }}>
+                          Haz clic para cambiar
+                        </p>
+                      </div>
+                    ) : (
+                      <div>
+                        <p style={{ fontSize: '1.2em', margin: '0 0 10px 0' }}>📁</p>
+                        <p style={{ margin: '0 0 5px 0' }}>
+                          Arrastra un archivo .conf de WireGuard aquí
+                        </p>
+                        <p style={{ fontSize: '0.85rem', color: '#888', margin: 0 }}>
+                          o haz clic para seleccionar
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                  {wireguardConfigPath && (
+                    <button
+                      className="btn-secondary"
+                      onClick={async () => {
+                        try {
+                          if (window.electronAPI.removeWireguardConfig) {
+                            await window.electronAPI.removeWireguardConfig();
+                            setWireguardConfigPath('');
+                            setWireguardConfigName('');
+                            showToast('Configuración de WireGuard eliminada', 'info');
+                          }
+                        } catch (error) {
+                          console.error('Error removing WireGuard config:', error);
+                          showToast('Error al eliminar configuración: ' + error.message, 'error');
+                        }
+                      }}
+                      style={{ marginTop: '10px', fontSize: '0.9rem' }}
+                    >
+                      Eliminar configuración
+                    </button>
+                  )}
+                  <p className="setting-help" style={{ fontSize: '0.85rem', marginTop: '10px' }}>
+                    Importa un archivo de configuración de WireGuard (.conf) para usar con la aplicación
+                  </p>
                 </div>
               </div>
             </div>

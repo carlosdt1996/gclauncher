@@ -88,4 +88,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onUpdateError: (callback) => ipcRenderer.on('update-error', (event, data) => callback(data)),
     onUpdateDownloadProgress: (callback) => ipcRenderer.on('update-download-progress', (event, data) => callback(data)),
     onUpdateDownloaded: (callback) => ipcRenderer.on('update-downloaded', (event, data) => callback(data)),
+    // WireGuard Configuration
+    setWireguardConfigPath: (filePath) => ipcRenderer.invoke('set-wireguard-config-path', filePath),
+    getWireguardConfigPath: () => ipcRenderer.invoke('get-wireguard-config-path'),
+    removeWireguardConfig: () => ipcRenderer.invoke('remove-wireguard-config'),
+    selectWireguardConfigFile: () => ipcRenderer.invoke('select-wireguard-config-file'),
+    handleDroppedWireguardFile: (fileName, fileContent) => ipcRenderer.invoke('handle-dropped-wireguard-file', { fileName, fileContent }),
 });
