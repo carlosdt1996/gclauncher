@@ -70,6 +70,15 @@
         ]
       }
     ],
+    "extraResources": [
+      {
+        "from": "build/wireguard/wireguard-installer.msi",
+        "to": "wireguard-installer.msi",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
     "win": {
       "target": [
         {
@@ -80,7 +89,8 @@
         }
       ],
       "publisherName": "GC Launcher",
-      "requestedExecutionLevel": "asInvoker"
+      "requestedExecutionLevel": "highestAvailable",
+      "executableName": "gclauncher"
     },
     "compression": "normal",
     "nsis": {
@@ -92,7 +102,11 @@
       "include": "build/installer.nsh",
       "deleteAppDataOnUninstall": false,
       "runAfterFinish": true,
-      "menuCategory": "Games"
+      "menuCategory": "Games",
+      "artifactName": "gclauncher-setup-${version}.${ext}",
+      "selectPerMachineByDefault": true,
+      "uninstallerIcon": null,
+      "installerIcon": null
     }
   }
 }
